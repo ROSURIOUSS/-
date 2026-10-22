@@ -16,8 +16,12 @@ import { aiAudit } from './auditor.js';
 import { memoryIndexSize, chronicle } from './memory.js';
 import { DAILY_LIMIT, PORT, HOST, MAX_CREATES_PER_HOUR } from './config.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PUBLIC = path.resolve(__dirname, '..', 'public');
+// В обычном запуске — папка public рядом с server/. В собранном .exe (SEA)
+// путь приходит из LORIA_PUBLIC_DIR: лаунчер распаковывает встроенные файлы.
+const HERE = typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC = process.env.LORIA_PUBLIC_DIR
+  ? path.resolve(process.env.LORIA_PUBLIC_DIR)
+  : path.resolve(HERE, '..', 'public');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

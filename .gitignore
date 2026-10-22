@@ -5,3 +5,6 @@ data/*.json
 data/*.jsonl
 .DS_Store
 *.log
+release/
+dist/
+build/

@@ -14,7 +14,7 @@ import { aiAudit } from './auditor.js';
 import { aiAvailable } from './ai.js';
 
 const API = () => `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-const SESSIONS_FILE = path.resolve('data', 'telegram.json');
+const SESSIONS_FILE = path.join(path.resolve(process.env.LORIA_DATA_DIR || 'data'), 'telegram.json');
 
 const sessions = new Map();
 const locks = new Set();

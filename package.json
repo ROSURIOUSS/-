@@ -1,6 +1,6 @@
 {
   "name": "loria-web",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Лория — хардкорная ИИ-RPG с суверенным Гейм-Мастером, аудитором состояния и памятью мира",
   "type": "module",
   "private": true,
@@ -15,6 +15,14 @@
     "test": "node scripts/selftest.js",
     "e2e": "node scripts/integration.js",
     "check": "npm test && npm run bot:test && npm run e2e",
-    "bot:test": "node scripts/bot-test.js"
+    "bot:test": "node scripts/bot-test.js",
+    "app": "node scripts/launcher.js",
+    "build:exe": "node scripts/build-exe.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.10",
+    "pe-library": "^1.0.1",
+    "postject": "^1.0.0-alpha.6",
+    "resedit": "^3.1.0"
   }
 }

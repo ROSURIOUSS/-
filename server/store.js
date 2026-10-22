@@ -4,7 +4,8 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import { makeId } from './state.js';
 
-const ROOT = path.resolve('data');
+// Папку сохранений можно увести наружу: .exe кладёт их рядом с собой или в AppData.
+const ROOT = path.resolve(process.env.LORIA_DATA_DIR || 'data');
 const GAMES = path.join(ROOT, 'games');
 
 async function ensure() {
