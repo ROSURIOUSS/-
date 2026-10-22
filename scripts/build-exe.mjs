@@ -267,6 +267,19 @@ async function ensureWinAddon() {
   return cached;
 }
 
+// Исходный node.exe может лежать в Program Files — туда писать нельзя,
+// а иконка и blob меняют сам файл. Поэтому всегда работаем с копией.
+function copyBase(base) {
+  const copy = path.join(BUILD, 'node-base.exe');
+  try {
+    fs.copyFileSync(base, copy);
+    fs.chmodSync(copy, 0o755);
+  } catch (err) {
+    throw new Error(`Не удалось скопировать ${base} в build\\node-base.exe: ${err?.message || err}`);
+  }
+  return copy;
+}
+
 async function buildOne(platform, outPath) {
   log(`\nСборка для ${platform === 'win' ? 'Windows x64' : 'Linux x64'}:`);
   const { out: publicJson } = buildPublicManifest();
@@ -283,10 +296,25 @@ async function buildOne(platform, outPath) {
   const blob = makeBlob(main, publicJson, extra);
   const base = await resolveNodeBinary(platform);
   let prepared = base;
-  if (platform === 'win') prepared = await decorateWindows(base);
+  if (platform === 'win') {
+    prepared = copyBase(base);
+    try {
+      prepared = await decorateWindows(prepared);
+    } catch (err) {
+      log(`  иконку поставить не вышло (${err?.message || err}) — собираю без неё`);
+      prepared = copyBase(base);
+    }
+  }
   const out = path.resolve(outPath);
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  inject(prepared, blob.blobPath, out);
+  try {
+    inject(prepared, blob.blobPath, out);
+  } catch (err) {
+    if (String(err?.message || err).includes('EPERM')) {
+      throw new Error(`Не удалось записать ${out}. Закрой запущенную игру (Loria.exe) и повтори сборку.`);
+    }
+    throw err;
+  }
   if (platform !== 'win') fs.chmodSync(out, 0o755);
   return out;
 }
