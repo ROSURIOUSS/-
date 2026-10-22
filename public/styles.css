@@ -425,6 +425,8 @@ button { cursor: pointer; }
 .turn__tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
 .tag { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); padding: 2px 7px; border-radius: 2px; }
 .tag--warn { color: #d9a08f; border-color: rgba(180,72,60,0.35); }
+.tag--xp { color: #a8c9ae; border-color: rgba(127,168,122,0.4); }
+.tag--level { color: #0f0d10; background: var(--accent); border-color: var(--accent); font-weight: 600; }
 
 .typing { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; padding: 10px 0 26px; }
 .typing__dots { display: inline-flex; gap: 4px; }
@@ -472,6 +474,7 @@ button { cursor: pointer; }
 .bar__fill--hp { background: linear-gradient(90deg, #8e3a32, #c25a4c); }
 .bar__fill--en { background: linear-gradient(90deg, #3d6a6a, #6aa3a0); }
 .bar__fill--gold { background: linear-gradient(90deg, #8a6a34, #cfae6b); }
+.bar__fill--xp { background: linear-gradient(90deg, #4a6a52, #8fbf9a); }
 .bar__val { text-align: right; font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); }
 
 .stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
@@ -501,6 +504,18 @@ button { cursor: pointer; }
 .audit-item .meta { display: block; font-size: 8.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
 
 .sheet-toggle { display: none; }
+
+.btn--level { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+.level-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 18px; }
+.level-choice {
+  text-align: left; border: 1px solid var(--line); border-radius: 3px; padding: 12px 14px;
+  background: rgba(0,0,0,0.25); display: grid; gap: 3px; transition: all 0.2s ease;
+}
+.level-choice:hover { border-color: var(--accent); background: var(--accent-soft); }
+.level-choice b { font-size: 14px; font-weight: 600; }
+.level-choice span { font-size: 11px; color: var(--muted); line-height: 1.4; }
+@media (max-width: 560px) { .level-grid { grid-template-columns: 1fr; } }
 
 /* ---------- оверлеи ---------- */
 

@@ -233,6 +233,33 @@ await test('сохранение скачивается и импортируе�
   assert.equal(broken.status, 400);
 });
 
+await test('опыт и уровни: улучшение выдаётся сервером', async () => {
+  const before = (await api('GET', `/api/games/${gameId}/levels`)).data;
+  assert.ok(before.choices.length >= 6);
+
+  const bad = await api('POST', `/api/games/${gameId}/levelup`, { choice: 'stat:Разум' });
+  assert.equal(bad.status, 400, 'улучшение без уровня прошло');
+
+  // начисляем опыт серией ходов, пока не появится уровень
+  let leveled = false;
+  for (let i = 0; i < 6 && !leveled; i++) {
+    const res = await api('POST', `/api/games/${gameId}/turn`, { action: `Осторожно осматриваю участок ${i}` });
+    assert.ok([200, 409].includes(res.status));
+    if (res.status !== 200) break;
+    leveled = Boolean(res.data.turn?.leveled);
+  }
+  const state = (await api('GET', `/api/games/${gameId}`)).data.state;
+  assert.ok(state.hero.level >= 1);
+  assert.ok(state.hero.xp >= 0);
+  if (state.hero.pendingLevel) {
+    const choice = before.choices.find((c) => c.id === 'hp') ? 'hp' : before.choices[0].id;
+    const res = await api('POST', `/api/games/${gameId}/levelup`, { choice });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.state.hero.pendingLevel, false);
+    assert.ok(res.data.choice);
+  }
+});
+
 await test('некорректные запросы не роняют сервер', async () => {
   const bad = await fetch(`${BASE}/api/games/${gameId}/turn`, {
     method: 'POST',

@@ -8,13 +8,13 @@ import { loadEnv } from './env.js';
 loadEnv();
 
 import { aiAvailable, aiConfig, aiStatus } from './ai.js';
-import { sanitizeAction, noteCheatAttempt, runTurn, startNewGame, forkGame, compactStateMemory, engineStats, DEMO_MODE, rest, rewind } from './engine.js';
-import { publicState } from './state.js';
+import { sanitizeAction, noteCheatAttempt, runTurn, startNewGame, forkGame, compactStateMemory, engineStats, DEMO_MODE, rest, rewind, levelUp } from './engine.js';
+import { publicState, levelChoices } from './state.js';
 import { PRESETS, ARCHETYPES, TRAITS, BURDENS, DIFFICULTIES } from './worlds.js';
 import { saveGame, loadGame, listGames, deleteGame, exportMarkdown, prune, importGame } from './store.js';
 import { aiAudit } from './auditor.js';
 import { memoryIndexSize, chronicle } from './memory.js';
-import { DAILY_LIMIT, PORT, HOST } from './config.js';
+import { DAILY_LIMIT, PORT, HOST, MAX_CREATES_PER_HOUR } from './config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.resolve(__dirname, '..', 'public');
@@ -68,7 +68,7 @@ function creationAllowed(req) {
   const now = Date.now();
   const bucket = createdByIp.get(ip) || [];
   const fresh = bucket.filter((t) => now - t < 3600_000);
-  if (fresh.length >= 40) {
+  if (MAX_CREATES_PER_HOUR > 0 && fresh.length >= MAX_CREATES_PER_HOUR) {
     createdByIp.set(ip, fresh);
     return false;
   }
@@ -183,7 +183,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/import') {
     let body;
     try {
-      body = await readBody(req, 4 * 1024 * 1024);
+      body = await readBody(req, 2 * 1024 * 1024);
     } catch (e) {
       return json(res, 400, { error: e.message });
     }
@@ -299,6 +299,25 @@ async function handleApi(req, res, url) {
       locks.delete(id);
     }
     return;
+  }
+
+  if (req.method === 'GET' && tail === 'levels') {
+    return json(res, 200, { level: state.hero.level, xp: state.hero.xp, next: 10 * state.hero.level, choices: levelChoices(state.hero) });
+  }
+
+  if (req.method === 'POST' && tail === 'levelup') {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      return json(res, 400, { error: e.message });
+    }
+    try {
+      const result = await levelUp(state, String(body.choice || ''));
+      return json(res, 200, { state: publicState(result.state), choice: result.choice, choices: result.choices });
+    } catch (err) {
+      return json(res, err.status === 400 ? 400 : 500, { error: err?.message || 'Улучшение не применилось' });
+    }
   }
 
   if (req.method === 'POST' && tail === 'rewind') {

@@ -3,7 +3,7 @@
 import { aiAvailable, askJson, AIError } from './ai.js';
 import { buildSystemPrompt, buildTurnPrompt, buildOpeningPrompt, buildCompactionPrompt } from './prompts.js';
 import { retrieve, rememberTurn } from './memory.js';
-import { createGame, serverRoll, applyDeltas, gameOver, makeId, restHero } from './state.js';
+import { createGame, serverRoll, applyDeltas, gameOver, makeId, restHero, awardExperience, applyLevelUp, levelChoices } from './state.js';
 import { saveGame } from './store.js';
 import { localAudit, aiAudit } from './auditor.js';
 import { demoOpening, demoTurn } from './demo.js';
@@ -233,6 +233,11 @@ export function commitPlan(state, plan, { action, roll, demo }) {
     if (roll.critical) state.stats.crits += 1;
     if (roll.fumble) state.stats.fumbles += 1;
     state.scene.lastCheck = turnEntry.check;
+    const xp = awardExperience(state, roll);
+    if (xp.gained) {
+      turnEntry.xp = xp.gained;
+      turnEntry.leveled = Boolean(xp.leveled);
+    }
   }
 
   const issues = localAudit(state, turnEntry, plan, { skipStyle: Boolean(demo) });
@@ -414,6 +419,14 @@ export async function forkGame(state) {
   if (last?.options?.length) copy.pendingOptions = last.options;
   await saveGame(copy);
   return copy;
+}
+
+/** Улучшение героя после нового уровня. */
+export async function levelUp(state, choiceId) {
+  const result = applyLevelUp(state, choiceId);
+  if (result.error) throw new AIError(result.error, { status: 400 });
+  await saveGame(state);
+  return { state, choice: result.choice, choices: levelChoices(state.hero) };
 }
 
 /** Уплотнение памяти второй моделью. */

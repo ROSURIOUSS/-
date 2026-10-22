@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 process.env.LORIA_DEMO = '1';
 
-const { createGame, serverRoll, applyDeltas, restHero, publicState } = await import('../server/state.js');
+const { createGame, serverRoll, applyDeltas, restHero, publicState, awardExperience, applyLevelUp, levelChoices } = await import('../server/state.js');
 const { retrieve, rememberTurn, memoryIndexSize } = await import('../server/memory.js');
 const { demoOpening } = await import('../server/demo.js');
 const engine = await import('../server/engine.js');
@@ -183,6 +183,48 @@ test('передышка отклоняется без энергии', () => {
   assert.ok(res.error);
 });
 
+// ---- опыт и уровни ----
+test('опыт даётся за выживание: успех больше, критический провал — ноль', () => {
+  const g = createGame({ worldId: 'ash', hero: { archetypeId: 'soldier' } });
+  const fail = awardExperience(g, { success: false, critical: false, fumble: false });
+  const ok = awardExperience(g, { success: true, critical: false, fumble: false });
+  const crit = awardExperience(g, { success: true, critical: true, fumble: false });
+  const fumble = awardExperience(g, { success: false, critical: false, fumble: true });
+  assert.ok(fail.gained >= 1);
+  assert.ok(ok.gained > fail.gained);
+  assert.ok(crit.gained > ok.gained);
+  assert.equal(fumble.gained, 0);
+});
+
+test('новый уровень открывает выбор улучшения ровно один раз', () => {
+  const g = createGame({ worldId: 'ash', hero: { archetypeId: 'thief' } });
+  g.hero.xp = 9;
+  awardExperience(g, { success: true, critical: true, fumble: false });
+  assert.equal(g.hero.level, 2);
+  assert.equal(g.hero.pendingLevel, true);
+  assert.ok(levelChoices(g.hero).length >= 6);
+});
+
+test('улучшение применяется только из разрешённого списка', () => {
+  const g = createGame({ worldId: 'ash', hero: { archetypeId: 'scholar' } });
+  assert.ok(applyLevelUp(g, 'stat:Разум').error, 'улучшение без уровня применилось');
+  g.hero.pendingLevel = true;
+  assert.ok(applyLevelUp(g, 'hack:all').error);
+  const before = g.hero.stats.Разум;
+  const res = applyLevelUp(g, 'stat:Разум');
+  assert.equal(res.ok, true);
+  assert.equal(g.hero.stats.Разум, before + 1);
+  assert.equal(g.hero.pendingLevel, false);
+});
+
+test('характеристика не поднимается выше 9', () => {
+  const g = createGame({ worldId: 'ash', hero: { archetypeId: 'scholar' } });
+  g.hero.stats.Разум = 9;
+  g.hero.pendingLevel = true;
+  assert.ok(applyLevelUp(g, 'stat:Разум').error);
+  assert.ok(!levelChoices(g.hero).some((c) => c.id === 'stat:Разум'));
+});
+
 // ---- память ----
 test('память находит нужные факты по смыслу', () => {
   const g = createGame({ worldId: 'noir', hero: { archetypeId: 'scholar' } });
@@ -287,6 +329,16 @@ test('хроника экспортируется в Markdown с броскам�
   assert.ok(md.includes('# Дождь над Порт-Анной'));
   assert.ok(md.includes('Бросок: Харизма'));
   assert.ok(md.includes('Ключ от кабинета'));
+});
+
+test('улучшение «+1 рывок» увеличивает запас и восстанавливает его', () => {
+  const g = createGame({ worldId: 'ash', hero: { archetypeId: 'medic' } });
+  g.hero.pendingLevel = true;
+  g.hero.boosts = 0;
+  const res = applyLevelUp(g, 'boosts');
+  assert.equal(res.ok, true);
+  assert.equal(g.hero.maxBoosts, 2);
+  assert.equal(g.hero.boosts, 2);
 });
 
 console.log(`\n  Итог: ${passed} прошло, ${failed} провалилось\n`);

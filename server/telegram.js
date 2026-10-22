@@ -169,6 +169,15 @@ function archetypesKeyboard(worldId) {
   return rows;
 }
 
+function levelKeyboard(choices) {
+  const rows = [];
+  for (let i = 0; i < choices.length; i += 2) {
+    rows.push(choices.slice(i, i + 2).map((c) => ({ text: c.name, callback_data: `lvl:${c.id}` })));
+  }
+  rows.push([{ text: 'Позже', callback_data: 'lvl:skip' }]);
+  return rows;
+}
+
 function optionsKeyboard(state) {
   const last = (state.log || []).slice(-1)[0];
   if (state.status === 'dead') {
@@ -215,7 +224,9 @@ export function renderScene(state, turn) {
     ? `\n\n🩹 <i>Аудитор: ${esc(entry.limits.slice(0, 2).join('; '))}</i>`
     : '';
   const reserve = entry?.demo ? '\n\n<i>· резервный рассказчик ·</i>' : '';
-  const stats = `\n\n${statLine(state.hero)}${limits}${reserve}`;
+  const xp = entry?.xp ? ` · ✦ +${entry.xp}` : '';
+  const lvl = entry?.leveled ? ` · ✦ уровень ${state.hero.level}` : '';
+  const stats = `\n\n${statLine(state.hero)}${xp}${lvl}${limits}${reserve}`;
   return `${header}${dice}\n\n${narration}${stats}`;
 }
 
@@ -232,6 +243,7 @@ function heroText(state) {
     `Бремя: ${esc(h.burden.name)} — ${esc(h.burden.desc)}\n` +
     `Состояния: ${esc(h.conditions.join(', ') || 'нет')}\n\n` +
     `🎒 ${esc(h.items.join(', ') || 'пусто')}\n\n` +
+    `Уровень ${h.level || 1} · опыт ${h.xp || 0}/${10 * (h.level || 1)}\n` +
     `Проверок: ${state.stats.checks} · успехов ${state.stats.successes} · критов ${state.stats.crits}`
   );
 }
@@ -351,6 +363,10 @@ async function makeTurn(chatId, action) {
     } else {
       await send(chatId, text, optionsKeyboard(result.state));
     }
+    if (result.state.hero.pendingLevel) {
+      const { levelChoices } = await import('./state.js');
+      await send(chatId, '✦ <b>Новый уровень</b>\nВыжил — значит, стал крепче. Выбери улучшение.', levelKeyboard(levelChoices(result.state.hero)));
+    }
   } catch (err) {
     console.error('[bot] turn:', err);
     await send(chatId, 'Мастер запнулся: ' + esc(err?.message || 'неизвестная ошибка') + '\nПопробуй ещё раз.');
@@ -440,6 +456,20 @@ export async function handleUpdate(update) {
     if (data.startsWith('a:')) {
       const [, worldId, archetypeId] = data.split(':');
       return createGame(chatId, worldId, archetypeId, cq.from?.first_name);
+    }
+    if (data.startsWith('lvl:')) {
+      const s = session(chatId);
+      const state = s.gameId ? await loadGame(s.gameId) : null;
+      if (!state) return send(chatId, 'Истории пока нет. /new');
+      const choice = data.slice(4);
+      if (choice === 'skip') return send(chatId, 'Улучшение отложено. Вернуться можно кнопкой «Уровень» в листе героя.');
+      const { levelUp } = await import('./engine.js');
+      try {
+        const result = await levelUp(state, choice);
+        return send(chatId, `✦ <b>Уровень ${result.state.hero.level}</b>\nУлучшение: ${esc(result.choice)}.\n\n${heroText(result.state)}`);
+      } catch (err) {
+        return send(chatId, '✦ ' + esc(err?.message || 'Улучшение не применилось'));
+      }
     }
     if (data === 'rewind') {
       const { rewind } = await import('./engine.js');

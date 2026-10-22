@@ -44,6 +44,9 @@ export function makeHero({ name, archetypeId, traitId, burdenId, custom }) {
     conditions: [],
     boosts: 1,
     maxBoosts: 1,
+    xp: 0,
+    level: 1,
+    pendingLevel: false,
     alive: true
   };
 }
@@ -124,6 +127,88 @@ function hero_boost_spent(state) {
     severity: 'soft',
     message: 'Рывок: второй бросок, взят лучший результат. Ещё один рывок — после отдыха.'
   });
+}
+
+export const XP_PER_LEVEL = 10;
+
+const LEVEL_CHOICES = {
+  hp: { id: 'hp', name: '+2 к максимуму здоровья', apply: (hero) => { hero.maxHp += 2; hero.hp = Math.min(hero.maxHp, hero.hp + 2); } },
+  energy: { id: 'energy', name: '+3 к максимуму энергии', apply: (hero) => { hero.maxEnergy += 3; hero.energy = Math.min(hero.maxEnergy, hero.energy + 3); } },
+  boosts: { id: 'boosts', name: '+1 рывок за отдых', apply: (hero) => { hero.maxBoosts += 1; hero.boosts = hero.maxBoosts; } }
+};
+
+for (const stat of STATS) {
+  LEVEL_CHOICES[`stat:${stat}`] = {
+    id: `stat:${stat}`,
+    name: `+1 ${stat}`,
+    stat,
+    apply: (hero) => { hero.stats[stat] = Math.min(9, hero.stats[stat] + 1); }
+  };
+}
+
+export function levelChoices(hero) {
+  return Object.values(LEVEL_CHOICES)
+    .filter((c) => !c.stat || hero.stats[c.stat] < 9)
+    .map((c) => ({ id: c.id, name: c.name }));
+}
+
+/**
+ * Опыт даётся за выживание, а не за победы: провал тоже учит, но меньше.
+ * Критический провал опыта не даёт вовсе — мир запомнил, а ты нет.
+ */
+export function awardExperience(state, roll) {
+  const hero = state.hero;
+  if (!hero || !roll || state.status === 'dead') return { gained: 0 };
+  let gained = 1;
+  if (roll.success) gained += 1;
+  if (roll.critical) gained += 2;
+  if (roll.fumble) gained = 0;
+
+  const tension = state.scene?.tension || 1;
+  if (tension >= 4 && gained > 0) gained += 1;
+
+  if (!gained) return { gained: 0 };
+
+  hero.xp = (hero.xp || 0) + gained;
+  let leveled = false;
+  while (hero.xp >= XP_PER_LEVEL * (hero.level || 1) && (hero.level || 1) < 12) {
+    hero.xp -= XP_PER_LEVEL * (hero.level || 1);
+    hero.level = (hero.level || 1) + 1;
+    hero.pendingLevel = true;
+    leveled = true;
+  }
+  if (leveled) {
+    state.audit.push({
+      turn: state.scene.turn,
+      at: Date.now(),
+      kind: 'level',
+      severity: 'soft',
+      message: `Новый уровень ${hero.level}: герой выжил достаточно, чтобы стать сильнее. Выбери улучшение.`
+    });
+  }
+  return { gained, leveled };
+}
+
+/** Улучшение при новом уровне. Список — только серверный, модель сюда не допускается. */
+export function applyLevelUp(state, choiceId) {
+  const hero = state.hero;
+  if (!hero?.pendingLevel) return { error: 'Новый уровень ещё не получен.' };
+  const choice = LEVEL_CHOICES[choiceId];
+  if (!choice) return { error: 'Такого улучшения нет.' };
+  if (choice.stat && hero.stats[choice.stat] >= 9) return { error: `${choice.stat} уже на максимуме.` };
+
+  choice.apply(hero);
+  hero.pendingLevel = false;
+  hero.levelUps = (hero.levelUps || 0) + 1;
+  state.audit.push({
+    turn: state.scene.turn,
+    at: Date.now(),
+    kind: 'level',
+    severity: 'soft',
+    message: `Уровень ${hero.level}: ${choice.name}.`
+  });
+  state.updatedAt = Date.now();
+  return { ok: true, choice: choice.name, hero };
 }
 
 /** Передышка: энергия в здоровье, без обращения к модели. */

@@ -594,6 +594,10 @@ function turnHTML(entry, isFirst, isNew = false) {
     <div class="turn__action"><b>Ход ${entry.turn}</b><span>${esc(entry.action)}</span></div>
     ${entry.check ? checkCard(entry.check) : ''}
     <div class="narration">${nl2p(entry.narration)}</div>
+    ${entry.xp || entry.leveled ? `<div class="turn__tags">
+      ${entry.xp ? `<span class="tag tag--xp">+${entry.xp} опыта</span>` : ''}
+      ${entry.leveled ? `<span class="tag tag--level">новый уровень</span>` : ''}
+    </div>` : ''}
     ${limits.length ? `<div class="turn__tags">${limits.map((l) => `<span class="tag tag--warn">${esc(l)}</span>`).join('')}</div>` : ''}
     ${entry.demo ? `<div class="turn__tags"><span class="tag">резервный рассказчик</span></div>` : ''}
   </article>`;
@@ -732,6 +736,15 @@ function sheetHTML() {
       <div class="bar"><span class="bar__label">HP</span><span class="bar__track"><i class="bar__fill bar__fill--hp" style="width:${hpPct}%"></i></span><span class="bar__val">${hero.hp}/${hero.maxHp}</span></div>
       <div class="bar"><span class="bar__label">Энер</span><span class="bar__track"><i class="bar__fill bar__fill--en" style="width:${enPct}%"></i></span><span class="bar__val">${hero.energy}/${hero.maxEnergy}</span></div>
       <div class="bar"><span class="bar__label">Золото</span><span class="bar__track"><i class="bar__fill bar__fill--gold" style="width:${goldPct}%"></i></span><span class="bar__val">${hero.gold}</span></div>
+    </div>
+
+    <div class="sheet-block">
+      <div class="bar">
+        <span class="bar__label">Ур. ${hero.level || 1}</span>
+        <span class="bar__track"><i class="bar__fill bar__fill--xp" style="width:${Math.min(100, ((hero.xp || 0) / (10 * (hero.level || 1))) * 100)}%"></i></span>
+        <span class="bar__val">${hero.xp || 0}/${10 * (hero.level || 1)}</span>
+      </div>
+      ${hero.pendingLevel ? `<button class="btn btn--small btn--level" style="width:100%;margin-top:8px" data-act="levelup">Выбрать улучшение</button>` : ''}
     </div>
 
     <div class="sheet-block">
@@ -966,6 +979,7 @@ function finishTurn(payload) {
   updateSheet();
   renderChoices(payload.state);
   if (payload.demo) toast('Модель не ответила — сцену дописал резервный рассказчик.');
+  if (payload.turn?.leveled) setTimeout(() => showLevelUp(), 1100);
   if (payload.state.status === 'dead') {
     const input = document.getElementById('free-action');
     const btn = app.querySelector('[data-act="submit-free"]');
@@ -1327,6 +1341,14 @@ app.addEventListener('click', async (e) => {
     await rewindTurn();
     return;
   }
+  if (act === 'levelup') {
+    await showLevelUp();
+    return;
+  }
+  if (act === 'level-choice') {
+    await pickLevel(el.dataset.id);
+    return;
+  }
   if (act === 'import') {
     document.getElementById('import-file')?.click();
     return;
@@ -1361,16 +1383,21 @@ boot();
   }
 });
 
-overlayRoot.addEventListener('click', (e) => {
-  const el = e.target.closest('[data-act="close-overlay"]');
-  if (e.target.classList.contains('overlay')) hideOverlay();
-  if (el) {
-    if (el.getAttribute('href')) {
-      hideOverlay();
-      return;
-    }
-    hideOverlay();
+overlayRoot.addEventListener('click', async (e) => {
+  const action = e.target.closest('[data-act]');
+  if (action?.dataset.act === 'level-choice') {
+    await pickLevel(action.dataset.id);
+    return;
   }
+  if (action?.dataset.act === 'fork') {
+    await forkStory(action.dataset.id);
+    return;
+  }
+  if (action?.dataset.act === 'close-overlay') {
+    hideOverlay();
+    return;
+  }
+  if (e.target.classList.contains('overlay')) hideOverlay();
 });
 
 /** Досоздаёт/убирает кнопки рывка и отмены после хода, не трогая поле ввода. */
@@ -1427,6 +1454,51 @@ function rerenderComposer() {
       `${store.boostArmed ? '<b style="color:var(--accent)">Рывок заряжен:</b> при провале сервер перебросит кубик и возьмёт лучший результат.' : 'Бросок делает сервер. Мастер не может его отменить.'}${
         store.content.ai.available ? (store.content.ai.lastFailure ? ' Модель не ответила — сцены пишет резерв.' : '') : ' Резервный режим.'
       }`;
+  }
+}
+
+async function showLevelUp() {
+  if (!store.game) return;
+  try {
+    const data = await api(`/api/games/${store.game.id}/levels`);
+    if (!data.choices?.length) return toast('Улучшать больше нечего: всё на максимуме.', true);
+    overlayRoot.innerHTML = `<div class="overlay">
+      <div class="overlay__card">
+        <div class="eyebrow">Уровень ${data.level} · ${data.xp}/${data.next} опыта</div>
+        <h2>Герой выжил</h2>
+        <p>Мир не стал добрее — просто ты стал чуть крепче. Это не подарок: это цена, которую он согласился платить за твою настойчивость.</p>
+        <div class="level-grid">
+          ${data.choices
+            .map(
+              (c) => `<button class="level-choice" data-act="level-choice" data-id="${esc(c.id)}">
+                <b>${esc(c.name)}</b><span>${esc(
+                  c.id === 'hp' ? 'Больше держит удар' : c.id === 'energy' ? 'Дольше идёт' : c.id === 'boosts' ? 'Чаще рискует с умом' : 'Проверки этого типа станут надёжнее'
+                )}</span>
+              </button>`
+            )
+            .join('')}
+        </div>
+        <div class="overlay__actions">
+          <button class="btn btn--ghost" data-act="close-overlay">Позже</button>
+        </div>
+      </div>
+    </div>`;
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function pickLevel(id) {
+  if (!store.game) return;
+  try {
+    const res = await api(`/api/games/${store.game.id}/levelup`, { method: 'POST', body: JSON.stringify({ choice: id }) });
+    store.game = res.state;
+    hideOverlay();
+    updateSheet();
+    syncActionButtons();
+    toast(`Улучшение: ${res.choice}`);
+  } catch (err) {
+    toast(err.message, true);
   }
 }
 
