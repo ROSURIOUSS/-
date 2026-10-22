@@ -157,6 +157,7 @@ await test('спокойное действие проходит без брос
   assert.equal(res.status, 200);
   assert.equal(res.data.turn.check, null, 'на спокойное действие выпал кубик');
   assert.ok(res.data.turn.narration.length > 100, 'сцена пустая');
+  assert.ok(res.data.turn.xp >= 1, 'спокойный ход не дал опыта');
   const before = res.data.state.stats.checks;
   const again = await api('POST', `/api/games/${gameId}/turn`, { action: 'Спрашиваю у прохожего, где тут трактир' });
   assert.equal(again.data.turn.check, null, 'второй спокойный ход снова с кубиком');

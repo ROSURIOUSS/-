@@ -270,11 +270,12 @@ export function commitPlan(state, plan, { action, roll, demo }) {
     if (roll.critical) state.stats.crits += 1;
     if (roll.fumble) state.stats.fumbles += 1;
     state.scene.lastCheck = turnEntry.check;
-    const xp = awardExperience(state, roll);
-    if (xp.gained) {
-      turnEntry.xp = xp.gained;
-      turnEntry.leveled = Boolean(xp.leveled);
-    }
+  }
+  // Опыт — за любой прожитый ход: с броском больше, без броска немного.
+  const xp = awardExperience(state, roll);
+  if (xp.gained) {
+    turnEntry.xp = xp.gained;
+    turnEntry.leveled = Boolean(xp.leveled);
   }
 
   const issues = localAudit(state, turnEntry, plan, { skipStyle: Boolean(demo) });
