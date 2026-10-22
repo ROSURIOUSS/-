@@ -1,5 +1,5 @@
 // Офлайн-оболочка: интерфейс и обложки кэшируются, API — всегда из сети.
-const CACHE = 'loria-v6';
+const CACHE = 'loria-v7';
 const SHELL = [
   '/',
   '/index.html',
@@ -18,7 +18,14 @@ const SHELL = [
   '/art/hero-speaker.jpg',
   '/art/hero-medic.jpg',
   '/art/world-forest.jpg',
-  '/art/world-waste.jpg'
+  '/art/world-waste.jpg',
+  '/art/world-tide.jpg',
+  '/art/world-rail.jpg',
+  '/art/world-court.jpg',
+  '/art/hero-hunter.jpg',
+  '/art/hero-smuggler.jpg',
+  '/art/hero-priest.jpg',
+  '/art/hero-engineer.jpg'
 ];
 
 self.addEventListener('install', (event) => {

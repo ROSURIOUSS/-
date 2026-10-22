@@ -16,7 +16,8 @@ const store = {
   rollMemory: null,
   boostArmed: false,
   earlier: [],
-  earlierFrom: null
+  earlierFrom: null,
+  archive: { q: '', filter: 'all', sort: 'recent' }
 };
 
 const STAT_SHORT = { Сила: 'Сила', Ловкость: 'Ловк', Разум: 'Разум', Воля: 'Воля', Харизма: 'Хар' };
@@ -82,6 +83,29 @@ function formatTurnDate(ts) {
   }
 }
 
+function timeAgo(ts) {
+  const diff = Date.now() - Number(ts || 0);
+  if (!Number.isFinite(diff) || diff < 0) return '';
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'только что';
+  if (min < 60) return `${min} мин назад`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours} ч назад`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'вчера';
+  if (days < 30) return `${days} дн назад`;
+  return formatTurnDate(ts);
+}
+
+function plural(n, forms) {
+  const value = Math.abs(Number(n) || 0) % 100;
+  const last = value % 10;
+  if (value > 10 && value < 20) return forms[2];
+  if (last === 1) return forms[0];
+  if (last >= 2 && last <= 4) return forms[1];
+  return forms[2];
+}
+
 // ---------- иконки ----------
 
 const MARK = `<svg class="brand__mark" viewBox="0 0 100 100" fill="none" aria-hidden="true">
@@ -104,6 +128,16 @@ async function boot() {
   await route();
   window.addEventListener('hashchange', route);
   document.addEventListener('keydown', onKey);
+  window.addEventListener(
+    'scroll',
+    () => {
+      const btn = document.getElementById('to-bottom');
+      if (!btn) return;
+      const gap = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+      btn.classList.toggle('is-on', gap > 500);
+    },
+    { passive: true }
+  );
 }
 
 function renderLoader() {
@@ -129,6 +163,7 @@ async function route() {
   }
   if (section === 'worlds') {
     store.view = 'worlds';
+    await refreshGames();
     renderWorlds();
     return;
   }
@@ -179,7 +214,7 @@ function renderHome() {
         </div>
       </div>
       <div class="topbar__meta">
-        <span class="chip">${store.content.worlds.length} мира</span>
+        <span class="chip">${store.content.worlds.length} ${plural(store.content.worlds.length, ['мир', 'мира', 'миров'])}</span>
         <button class="chip ${aiState().tone}" data-act="ai-panel" title="Проверить мастера" style="background:none;border:1px solid var(--line);cursor:pointer"><span class="dot"></span>${aiState().label}</button>
         <button class="btn btn--ghost btn--small" data-act="nav" data-to="/rules">Правила</button>
         <button class="btn btn--ghost btn--small" data-act="nav" data-to="/archive">Архив</button>
@@ -196,6 +231,7 @@ function renderHome() {
         </p>
         <div class="hero-actions">
           <button class="btn btn--primary" data-act="nav" data-to="/worlds">Новая история</button>
+          <button class="btn btn--ghost" data-act="random-world">Случайный мир</button>
           ${lastGame ? `<button class="btn" data-act="open" data-id="${esc(lastGame.id)}">${lastGame.status === 'dead' ? 'Открыть хронику' : 'Продолжить'}: ${esc(clampText(lastGame.heroName, 18))}</button>` : ''}
         </div>
         <p class="hero-note">
@@ -251,6 +287,8 @@ function startSlideshow() {
 function renderWorlds() {
   clearInterval(slideTimer);
   setAccent('#c9814a');
+  const alive = (store.games || []).filter((g) => g.status !== 'dead');
+  const systems = [...new Set(store.content.worlds.map((w) => (w.system || 'd20').toUpperCase()))];
   app.innerHTML = `
   <div class="page">
     <header class="topbar" style="padding-left:0;padding-right:0">
@@ -264,8 +302,31 @@ function renderWorlds() {
         <h1>Мир, который тебя не ждал</h1>
         <p>У каждого мира свои правила и своя система проверок. Механику задаёт автор мира, а не движок — мастер обязан их соблюдать.</p>
       </div>
-      <div class="chip">${store.content.worlds.length} готовых миров + свой</div>
+      <div class="chip">${store.content.worlds.length} ${plural(store.content.worlds.length, ['мир', 'мира', 'миров'])} · ${systems.length} ${plural(systems.length, ['система', 'системы', 'систем'])} · ${systems.join(' / ')}</div>
     </div>
+
+    ${
+      alive.length
+        ? `<div class="resume-strip">
+            <div class="resume-strip__label">Незаконченные истории</div>
+            <div class="resume-strip__row">
+              ${alive
+                .slice(0, 4)
+                .map(
+                  (g) => `<button class="resume-card" data-act="open" data-id="${esc(g.id)}">
+                    <span class="resume-card__cover" style="background-image:url('${esc(g.art || '/art/world-ash.jpg')}')"></span>
+                    <span class="resume-card__body">
+                      <b>${esc(g.heroName)}</b>
+                      <span>${esc(g.title)} · ход ${Math.max(0, (g.turn || 1) - 1)} · ур. ${esc(g.level || 1)}</span>
+                    </span>
+                    <span class="resume-card__go">→</span>
+                  </button>`
+                )
+                .join('')}
+            </div>
+          </div>`
+        : ''
+    }
 
     <div class="worlds-grid">
       ${store.content.worlds
@@ -469,6 +530,7 @@ function renderBuilder() {
           <div class="preview-hero__name">${esc(d.name || 'Безымянный')}</div>
           <div class="preview-hero__role">${esc(arch.name)} · ${esc(diff.name)}</div>
           <div class="preview-hero__art" style="background-image:url('${esc(arch.portrait || world.art)}')"></div>
+          ${arch.hook ? `<p class="preview-hero__hook">${esc(arch.hook)}</p>` : ''}
           <div class="kv"><span>Здоровье</span><b>${hp}</b></div>
           <div class="kv"><span>Энергия</span><b>24</b></div>
           <div class="kv"><span>Золото</span><b>15</b></div>
@@ -636,6 +698,14 @@ function headerHTML(s) {
     <div class="scene-title">
       <div class="eyebrow">${esc(s.world.genre)} · ${esc(s.difficulty.name)} · ход ${s.scene.turn - 1}</div>
       <h1>${esc(s.world.title)}</h1>
+      <div class="scene-stats">
+        <span class="scene-stat" data-k="hp"><i></i>HP <b>${s.hero.hp}</b><span>/${s.hero.maxHp}</span></span>
+        <span class="scene-stat" data-k="en"><i></i>ЭН <b>${s.hero.energy}</b><span>/${s.hero.maxEnergy}</span></span>
+        <span class="scene-stat" data-k="gold"><i></i><b>${s.hero.gold}</b> зол.</span>
+        <span class="scene-stat" data-k="xp"><i></i>ур. <b>${s.hero.level || 1}</b><span> · ${s.hero.xp || 0}/${10 * (s.hero.level || 1)}</span></span>
+        ${s.hero.boosts > 0 ? `<span class="scene-stat" data-k="boost"><i></i>рывок <b>${s.hero.boosts}</b></span>` : ''}
+        <span class="save-pill" id="save-pill" title="Каждый ход сохраняется на диск">сохранено</span>
+      </div>
       <div class="scene-hud">
         <span class="hud-item hud-item--hp"><i style="width:${Math.max(0, Math.min(100, (s.hero.hp / s.hero.maxHp) * 100))}%"></i><b>${s.hero.hp}/${s.hero.maxHp}</b></span>
         <span class="hud-item hud-item--en"><i style="width:${Math.max(0, Math.min(100, (s.hero.energy / s.hero.maxEnergy) * 100))}%"></i><b>${s.hero.energy}/${s.hero.maxEnergy}</b></span>
@@ -653,6 +723,7 @@ function headerHTML(s) {
     </div>
     <div class="scene-head__actions">
       <button class="btn btn--ghost btn--small sheet-toggle" data-act="toggle-sheet" aria-label="Открыть лист героя">Лист героя</button>
+      <button class="btn btn--ghost btn--small" data-act="help" aria-label="Как играть">?</button>
       <button class="btn btn--ghost btn--small" data-act="ai-panel" aria-label="Мастер и модель">Мастер</button>
       <button class="btn btn--ghost btn--small" data-act="rules" aria-label="Правила мира">Правила</button>
       <a class="btn btn--ghost btn--small" href="/api/games/${esc(s.id)}/export">Хроника</a>
@@ -739,12 +810,13 @@ function renderPlay(data) {
           <button class="btn btn--primary" data-act="submit-free" ${dead ? 'disabled' : ''}><span>Действовать</span>↵</button>
         </div>
         <div class="composer__hint">
-          <span class="keys-hint">1–4 — варианты · ↑ — прошлые действия · H — лист героя</span>
+          <span class="keys-hint">1–6 — варианты · ↑ — прошлые действия · H — лист героя · ? — подсказка</span>
           ${store.boostArmed ? '<b style="color:var(--accent)">Рывок заряжен:</b> при провале сервер перебросит кубик и возьмёт лучший результат.' : 'Бросок делает сервер. Мастер не может его отменить.'}
           ${store.content.ai.available ? (store.content.ai.lastFailure ? ' Модель не ответила — сцены пишет резерв.' : '') : ' Резервный режим.'}
         </div>
       </div>
     </footer>
+    <button class="to-bottom" id="to-bottom" data-act="to-bottom" aria-label="Прокрутить вниз">↓</button>
   </div>`;
 
   const freeInput = document.getElementById('free-action');
@@ -859,6 +931,7 @@ function sheetHTML() {
           mem.quests.some((q) => q.status === 'active') ? ` <b class="tab__count">${mem.quests.filter((q) => q.status === 'active').length}</b>` : ''
         }</button>
         <button class="tab ${tab === 'audit' ? 'is-active' : ''}" data-act="tab" data-tab="audit">Аудит</button>
+        <button class="tab ${tab === 'chronicle' ? 'is-active' : ''}" data-act="tab" data-tab="chronicle">Ходы${(s.log || []).length ? ` <span class="tab__muted">${(s.log || []).length}</span>` : ''}</button>
       </div>
 
       ${
@@ -903,6 +976,23 @@ function sheetHTML() {
           : ''
       }
       ${
+        tab === 'chronicle'
+          ? `<div class="chronicle">${(s.log || [])
+              .slice()
+              .reverse()
+              .map((t) => {
+                const total = t.check ? ` · ${t.check.total}/${t.check.dc}` : '';
+                const result = t.check ? (t.check.success ? 'ok' : 'fail') : '';
+                return `<button class="chronicle__item" data-act="goto-turn" data-turn="${t.turn}" data-result="${result}">
+                  <span class="meta">ход ${t.turn}${total}</span>
+                  <b>${esc(clampText(t.action, 70))}</b>
+                  <span>${esc(clampText((t.narration || '').split(/\n{2,}/)[0], 110))}</span>
+                </button>`;
+              })
+              .join('') || '<div class="mem-empty">История только началась.</div>'}</div>`
+          : ''
+      }
+      ${
         tab === 'audit'
           ? `<div class="audit-list">${audit
               .map(
@@ -922,6 +1012,7 @@ function sheetHTML() {
       <div class="kv"><span>Криты / провалы</span><b>${s.stats.crits} / ${s.stats.fumbles}</b></div>
       <div class="kv"><span>Отметок аудитора</span><b>${(s.audit || []).length}</b></div>
       <div class="kv"><span>Отмен в запасе</span><b>${s.rewinds || 0}</b></div>
+      <div class="kv"><span>Мир · система</span><b>${esc(s.world.title)} · ${esc((s.world.system || 'd20').toUpperCase())}</b></div>
       ${s.usage ? `<div class="kv"><span>Запросов к модели сегодня</span><b>${s.usage.requests}</b></div>` : ''}
       ${
         s.usage
@@ -932,6 +1023,7 @@ function sheetHTML() {
       }
       <div style="display:flex;gap:6px;margin-top:10px">
         <a class="btn btn--ghost btn--small" style="flex:1" href="/api/games/${esc(s.id)}/download">Скачать сохранение</a>
+        <a class="btn btn--ghost btn--small" style="flex:1" href="/api/games/${esc(s.id)}/export" title="Хроника в Markdown">Хроника .md</a>
       </div>
     </div>
   `;
@@ -940,6 +1032,22 @@ function sheetHTML() {
 function updateSheet() {
   const sheet = document.getElementById('sheet');
   if (sheet) sheet.innerHTML = sheetHTML();
+}
+
+function refreshHeader() {
+  const head = document.querySelector('.scene-head__inner');
+  if (!head || !store.game) return;
+  head.innerHTML = headerHTML(store.game);
+  markSaved();
+}
+
+function markSaved() {
+  const pill = document.getElementById('save-pill');
+  if (!pill) return;
+  pill.textContent = 'сохранено';
+  pill.classList.add('is-flash');
+  clearTimeout(markSaved.timer);
+  markSaved.timer = setTimeout(() => pill.classList.remove('is-flash'), 1800);
 }
 
 function scrollToBottom(smooth = true) {
@@ -1093,8 +1201,7 @@ function finishTurn(payload) {
     const more = transcript.querySelector('.transcript__more b');
     if (more && store.earlierFrom) more.textContent = String(store.earlierFrom);
   }
-  const head = document.querySelector('.scene-head__inner');
-  if (head) head.innerHTML = headerHTML(store.game);
+  refreshHeader();
   syncActionButtons();
   updateSheet();
   renderChoices(payload.state);
@@ -1275,6 +1382,31 @@ async function saveAIKey() {
   }
 }
 
+function showHelp() {
+  const rows = [
+    ['1–6', 'выбрать вариант ответа'],
+    ['↑ / ↓', 'прошлые действия в поле ввода'],
+    ['Enter', 'отправить действие'],
+    ['H', 'лист героя'],
+    ['Esc', 'закрыть окно или лист'],
+    ['?', 'эта подсказка']
+  ];
+  overlayRoot.innerHTML = `<div class="overlay" data-act="close-overlay">
+    <div class="overlay__card" data-stop="1">
+      <div class="eyebrow">Подсказка</div>
+      <h2>Как играть</h2>
+      <p>Ты описываешь действие — мастер отвечает сценой. Всё, что похоже на риск, решает серверный бросок: модель не может подкрутить цифры. Смерть необратима, но историю можно отмотать на ход назад.</p>
+      <div class="help-rows">
+        ${rows.map(([k, v]) => `<div><kbd>${esc(k)}</kbd><span>${esc(v)}</span></div>`).join('')}
+      </div>
+      <div class="overlay__actions">
+        <button class="btn btn--primary" data-act="close-overlay">Понятно</button>
+        <button class="btn btn--ghost" data-act="rules">Правила мира</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function showRules() {
   const s = store.game;
   overlayRoot.innerHTML = `<div class="overlay" data-act="close-overlay">
@@ -1418,57 +1550,151 @@ function renderRules() {
 
 // ---------- архив ----------
 
+function archiveFiltered() {
+  const a = store.archive;
+  const q = a.q.trim().toLowerCase();
+  let list = (store.games || []).filter((g) => {
+    if (a.filter === 'alive' && g.status === 'dead') return false;
+    if (a.filter === 'dead' && g.status !== 'dead') return false;
+    if (!q) return true;
+    const haystack = `${g.heroName || ''} ${g.title || ''} ${g.genre || ''} ${g.difficulty || ''}`.toLowerCase();
+    return haystack.includes(q);
+  });
+  if (a.sort === 'turns') list = list.sort((x, y) => (y.turn || 0) - (x.turn || 0));
+  else if (a.sort === 'name') list = list.sort((x, y) => String(x.heroName || '').localeCompare(String(y.heroName || ''), 'ru'));
+  else list = list.sort((x, y) => (y.updatedAt || 0) - (x.updatedAt || 0));
+  return list;
+}
+
+function archiveFilterBtn(value, label) {
+  const on = store.archive.filter === value;
+  return `<button class="chip archive-filter ${on ? 'is-on' : ''}" data-act="archive-filter" data-v="${value}">${label}</button>`;
+}
+
+function archiveCardHTML(g) {
+  const dead = g.status === 'dead';
+  const turns = Math.max(0, (g.turn || 1) - 1);
+  return `<article class="archive-card ${dead ? 'is-dead' : ''}">
+    <div class="archive-card__cover" style="background-image:url('${esc(g.art || '/art/world-ash.jpg')}')">
+      <span class="archive-card__state">${dead ? 'история окончена' : 'на паузе'}</span>
+      <span class="archive-card__turns">${turns} ${plural(turns, ['ход', 'хода', 'ходов'])}</span>
+    </div>
+    <div class="archive-card__body">
+      <div class="archive-card__top">
+        <div>
+          <h3>${esc(g.heroName || 'Безымянный')}</h3>
+          <div class="archive-card__world">${esc(g.title || '')}${g.genre ? ` · ${esc(g.genre)}` : ''}</div>
+        </div>
+        <span class="archive-card__level">ур. ${esc(g.level || 1)}</span>
+      </div>
+      <div class="archive-card__meta">
+        <span>HP ${esc(g.hp ?? '?')}</span>
+        ${g.quests ? `<span>заданий: <b>${esc(g.quests)}</b></span>` : ''}
+        ${g.difficulty ? `<span>${esc(g.difficulty)}</span>` : ''}
+      </div>
+      <div class="archive-card__foot">
+        <span class="archive-card__date">${timeAgo(g.updatedAt)}</span>
+        <div class="archive-card__actions">
+          <button class="btn btn--small" data-act="open" data-id="${esc(g.id)}">${dead ? 'Открыть' : 'Продолжить'}</button>
+          ${dead ? `<button class="btn btn--ghost btn--small" data-act="fork" data-id="${esc(g.id)}">Ветка</button>` : ''}
+          <a class="btn btn--ghost btn--small" href="/api/games/${esc(g.id)}/export" title="Хроника в Markdown">.md</a>
+          <a class="btn btn--ghost btn--small" href="/api/games/${esc(g.id)}/download" title="Скачать сохранение">json</a>
+          <button class="btn btn--ghost btn--small btn--danger" data-act="delete" data-id="${esc(g.id)}" title="Удалить">×</button>
+        </div>
+      </div>
+    </div>
+  </article>`;
+}
+
+function renderArchiveList() {
+  const box = document.getElementById('archive-list');
+  if (!box) return;
+  const list = archiveFiltered();
+  const total = store.games.length;
+  const dead = store.games.filter((g) => g.status === 'dead').length;
+  const turns = store.games.reduce((sum, g) => sum + Math.max(0, (g.turn || 1) - 1), 0);
+  const count = document.getElementById('archive-count');
+  if (count) {
+    count.innerHTML =
+      `${total} ${plural(total, ['история', 'истории', 'историй'])} · ` +
+      `${turns} ${plural(turns, ['ход', 'хода', 'ходов'])} · ` +
+      `${dead} ${plural(dead, ['погибший', 'погибших', 'погибших'])}`;
+  }
+  if (!total) {
+    box.innerHTML = `<div class="archive-empty">
+      <h3>Архив пуст</h3>
+      <p>Здесь появятся все твои истории: с обложкой мира, уровнем героя и числом ходов.</p>
+      <button class="btn btn--primary" data-act="nav" data-to="/worlds">Начать первую</button>
+    </div>`;
+    return;
+  }
+  if (!list.length) {
+    box.innerHTML = `<div class="archive-empty">
+      <h3>Ничего не найдено</h3>
+      <p>Попробуй другое имя героя или мира — либо сбрось фильтры.</p>
+      <button class="btn" data-act="archive-reset">Сбросить фильтры</button>
+    </div>`;
+    return;
+  }
+  box.innerHTML = list.map(archiveCardHTML).join('');
+}
+
 function renderArchive() {
+  clearInterval(slideTimer);
   setAccent('#c9814a');
+  const a = store.archive;
   app.innerHTML = `
   <div class="page">
     <header class="topbar" style="padding-left:0;padding-right:0">
       <div class="brand">${MARK}<div><div class="brand__name">Лория</div><div class="brand__sub">архив</div></div></div>
-      <button class="btn btn--ghost btn--small" data-act="nav" data-to="/">На главную</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn--ghost btn--small" data-act="nav" data-to="/">На главную</button>
+      </div>
     </header>
     <div class="page-head">
       <div>
         <div class="eyebrow">Твои истории</div>
         <h1>Архив</h1>
-        <p>Каждая история хранится локально на сервере. Можно продолжить или забрать хронику в Markdown.</p>
+        <p>Каждая история хранится локально. Можно продолжить с того же хода, открыть ветку после смерти или забрать хронику в Markdown.</p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn--ghost" data-act="import">Загрузить файл</button>
         <button class="btn btn--primary" data-act="nav" data-to="/worlds">Новая история</button>
       </div>
     </div>
-    <input type="file" id="import-file" accept="application/json,.json" hidden />
-    <div class="archive-list">
-      ${
-        store.games.length
-          ? store.games
-              .map(
-                (g) => `<div class="archive-item">
-                  <img src="${esc(g.art || '/art/world-ash.jpg')}" alt="" />
-                  <div>
-                    <h4>${esc(g.heroName)} <span style="color:var(--muted);font-size:13px">· ${esc(g.title)}</span></h4>
-                    <p>${esc(g.status === 'dead' ? 'погиб' : 'жив')} · ходов ${g.turn - 1} · HP ${esc(g.hp)} · ${esc(g.difficulty || '')} · ${formatTurnDate(g.updatedAt)}</p>
-                  </div>
-                  <div class="archive-item__right">
-                    <button class="btn btn--small" data-act="open" data-id="${esc(g.id)}">${g.status === 'dead' ? 'Открыть' : 'Продолжить'}</button>
-                    ${g.status === 'dead' ? `<button class="btn btn--ghost btn--small" data-act="fork" data-id="${esc(g.id)}">Ветка</button>` : ''}
-                    <a class="btn btn--ghost btn--small" href="/api/games/${esc(g.id)}/export">.md</a>
-                    <a class="btn btn--ghost btn--small" href="/api/games/${esc(g.id)}/download" title="Скачать сохранение">json</a>
-                    <button class="btn btn--ghost btn--small btn--danger" data-act="delete" data-id="${esc(g.id)}">×</button>
-                  </div>
-                </div>`
-              )
-              .join('')
-          : `<div class="panel"><p style="margin:0;color:var(--muted)">Пока пусто. Первая история начинается на главной.</p></div>`
-      }
+
+    <div class="archive-toolbar">
+      <input class="input archive-search" id="archive-q" placeholder="Найти героя, мир или жанр" value="${esc(a.q)}" autocomplete="off" aria-label="Поиск по архиву" />
+      <div class="archive-filters" role="group" aria-label="Фильтр историй">
+        ${archiveFilterBtn('all', 'Все')}${archiveFilterBtn('alive', 'Живые')}${archiveFilterBtn('dead', 'Погибшие')}
+      </div>
+      <select class="input archive-sort" id="archive-sort" aria-label="Сортировка">
+        <option value="recent">Сначала свежие</option>
+        <option value="turns">Больше ходов</option>
+        <option value="name">По имени героя</option>
+      </select>
     </div>
+    <div class="archive-summary" id="archive-count"></div>
+    <div class="archive-grid" id="archive-list"></div>
+    <input type="file" id="import-file" accept="application/json,.json" hidden />
   </div>`;
 
+  const sort = document.getElementById('archive-sort');
+  if (sort) sort.value = a.sort;
+  document.getElementById('archive-q')?.addEventListener('input', (e) => {
+    store.archive.q = e.target.value;
+    renderArchiveList();
+  });
+  document.getElementById('archive-sort')?.addEventListener('change', (e) => {
+    store.archive.sort = e.target.value;
+    renderArchiveList();
+  });
   const fileInput = document.getElementById('import-file');
   fileInput?.addEventListener('change', (e) => {
     importSave(e.target.files?.[0]);
     e.target.value = '';
   });
+  renderArchiveList();
 }
 
 // ---------- события ----------
@@ -1593,6 +1819,32 @@ app.addEventListener('click', async (e) => {
     hideOverlay();
     return;
   }
+  if (act === 'goto-turn') {
+    const n = el.dataset.turn;
+    if (window.innerWidth <= 1080) document.getElementById('sheet')?.classList.remove('is-open');
+    const node = document.querySelector(`.turn[data-turn="${n}"]`);
+    if (node) {
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      node.classList.add('turn--flash');
+      setTimeout(() => node.classList.remove('turn--flash'), 1600);
+    }
+    return;
+  }
+  if (act === 'help') {
+    showHelp();
+    return;
+  }
+  if (act === 'to-bottom') {
+    scrollToBottom();
+    return;
+  }
+  if (act === 'random-world') {
+    const worlds = store.content?.worlds || [];
+    if (!worlds.length) return;
+    const pick = worlds[Math.floor(Math.random() * worlds.length)];
+    location.hash = `#/create/${pick.id}`;
+    return;
+  }
   if (act === 'ai-panel') {
     showAIPanel();
     return;
@@ -1607,6 +1859,17 @@ app.addEventListener('click', async (e) => {
   }
   if (act === 'fork') {
     await forkStory(el.dataset.id);
+    return;
+  }
+  if (act === 'archive-filter') {
+    store.archive.filter = el.dataset.v || 'all';
+    app.querySelectorAll('[data-act="archive-filter"]').forEach((b) => b.classList.toggle('is-on', b === el));
+    renderArchiveList();
+    return;
+  }
+  if (act === 'archive-reset') {
+    store.archive = { q: '', filter: 'all', sort: 'recent' };
+    renderArchive();
     return;
   }
   if (act === 'delete') {
@@ -1742,6 +2005,7 @@ async function pickLevel(id) {
     const res = await api(`/api/games/${store.game.id}/levelup`, { method: 'POST', body: JSON.stringify({ choice: id }) });
     store.game = res.state;
     hideOverlay();
+    refreshHeader();
     updateSheet();
     syncActionButtons();
     toast(`Улучшение: ${res.choice}`);
@@ -1771,6 +2035,7 @@ async function takeRest() {
   try {
     const res = await api(`/api/games/${store.game.id}/rest`, { method: 'POST', body: '{}' });
     store.game = res.state;
+    refreshHeader();
     updateSheet();
     syncActionButtons();
     rerenderComposer();
@@ -1846,6 +2111,9 @@ function onKey(e) {
   }
   if (e.key === 'h' || e.key === 'р') {
     document.getElementById('sheet')?.classList.toggle('is-open');
+  }
+  if (e.key === '?') {
+    showHelp();
   }
 }
 

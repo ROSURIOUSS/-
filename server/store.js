@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { makeId } from './state.js';
+import { ARCHETYPES } from './worlds.js';
 
 // Папку сохранений можно увести наружу: .exe кладёт их рядом с собой или в AppData.
 const ROOT = path.resolve(process.env.LORIA_DATA_DIR || 'data');
@@ -40,14 +41,8 @@ export function migrate(state) {
   if (!Array.isArray(hero.conditions)) hero.conditions = [];
   if (!Array.isArray(hero.items)) hero.items = [];
   if (!hero.portrait) {
-    const portraits = {
-      soldier: '/art/hero-soldier.jpg',
-      thief: '/art/hero-thief.jpg',
-      scholar: '/art/hero-scholar.jpg',
-      speaker: '/art/hero-speaker.jpg',
-      medic: '/art/hero-medic.jpg'
-    };
-    hero.portrait = portraits[hero.archetypeId] || null;
+    // Берём портрет из каталога архетипов: новые классы не требуют правок миграции.
+    hero.portrait = ARCHETYPES.find((a) => a.id === hero.archetypeId)?.portrait || null;
   }
   state.memory = state.memory || { facts: [], chunks: [], npcs: [], quests: [] };
   for (const key of ['facts', 'chunks', 'npcs', 'quests']) {
@@ -100,6 +95,9 @@ export async function listGames(limit = 40) {
         turn: s.scene?.turn || 1,
         status: s.status,
         difficulty: s.difficulty?.name,
+        worldId: s.world?.id,
+        level: s.hero?.level || 1,
+        quests: (s.memory?.quests || []).filter((q) => q.status === 'active').length,
         updatedAt: s.updatedAt || s.createdAt,
         hp: `${s.hero?.hp}/${s.hero?.maxHp}`
       });
