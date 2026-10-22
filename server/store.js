@@ -25,10 +25,41 @@ export async function saveGame(state) {
   return state;
 }
 
+/** Аккуратно доводит старые сохранения до текущей схемы. */
+export function migrate(state) {
+  if (!state || typeof state !== 'object') return state;
+  state.hero = state.hero || {};
+  const hero = state.hero;
+  if (!Number.isFinite(hero.boosts)) hero.boosts = 1;
+  if (!Number.isFinite(hero.maxBoosts)) hero.maxBoosts = 1;
+  if (!Array.isArray(hero.conditions)) hero.conditions = [];
+  if (!Array.isArray(hero.items)) hero.items = [];
+  if (!hero.portrait) {
+    const portraits = {
+      soldier: '/art/hero-soldier.jpg',
+      thief: '/art/hero-thief.jpg',
+      scholar: '/art/hero-scholar.jpg',
+      speaker: '/art/hero-speaker.jpg',
+      medic: '/art/hero-medic.jpg'
+    };
+    hero.portrait = portraits[hero.archetypeId] || null;
+  }
+  state.memory = state.memory || { facts: [], chunks: [], npcs: [], quests: [] };
+  for (const key of ['facts', 'chunks', 'npcs', 'quests']) {
+    if (!Array.isArray(state.memory[key])) state.memory[key] = [];
+  }
+  state.audit = Array.isArray(state.audit) ? state.audit : [];
+  state.log = Array.isArray(state.log) ? state.log : [];
+  state.flags = state.flags && typeof state.flags === 'object' ? state.flags : {};
+  state.stats = state.stats || { checks: 0, successes: 0, failures: 0, crits: 0, fumbles: 0, deaths: 0, drained: 0 };
+  state.scene = state.scene || { location: 'Начало пути', time: 'неизвестно', weather: '', turn: 1, tension: 1 };
+  return state;
+}
+
 export async function loadGame(id) {
   try {
     const raw = await fs.readFile(fileFor(id), 'utf8');
-    return JSON.parse(raw);
+    return migrate(JSON.parse(raw));
   } catch {
     return null;
   }

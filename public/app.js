@@ -130,6 +130,11 @@ async function route() {
     renderWorlds();
     return;
   }
+  if (section === 'rules') {
+    store.view = 'rules';
+    renderRules();
+    return;
+  }
   if (section === 'archive') {
     store.view = 'archive';
     store.games = (await api('/api/games').catch(() => ({ games: [] }))).games || [];
@@ -174,6 +179,7 @@ function renderHome() {
       <div class="topbar__meta">
         <span class="chip">${store.content.worlds.length} мира</span>
         <span class="chip ${aiState().tone}"><span class="dot"></span>${aiState().label}</span>
+        <button class="btn btn--ghost btn--small" data-act="nav" data-to="/rules">Правила</button>
         <button class="btn btn--ghost btn--small" data-act="nav" data-to="/archive">Архив</button>
       </div>
     </header>
@@ -608,8 +614,8 @@ function headerHTML(s) {
       </div>
     </div>
     <div class="scene-head__actions">
-      <button class="btn btn--ghost btn--small sheet-toggle" data-act="toggle-sheet">Лист героя</button>
-      <button class="btn btn--ghost btn--small" data-act="rules">Правила</button>
+      <button class="btn btn--ghost btn--small sheet-toggle" data-act="toggle-sheet" aria-label="Открыть лист героя">Лист героя</button>
+      <button class="btn btn--ghost btn--small" data-act="rules" aria-label="Правила мира">Правила</button>
       <a class="btn btn--ghost btn--small" href="/api/games/${esc(s.id)}/export">Хроника</a>
       <button class="btn btn--ghost btn--small" data-act="nav" data-to="/">Выход</button>
     </div>`;
@@ -658,6 +664,7 @@ function renderPlay(data) {
           <button class="btn btn--primary" data-act="submit-free" ${dead ? 'disabled' : ''}><span>Действовать</span>↵</button>
         </div>
         <div class="composer__hint">
+          <span class="keys-hint">1–3 — варианты · H — лист героя</span>
           ${store.boostArmed ? '<b style="color:var(--accent)">Рывок заряжен:</b> при провале сервер перебросит кубик и возьмёт лучший результат.' : 'Бросок делает сервер. Мастер не может его отменить.'}
           ${store.content.ai.available ? (store.content.ai.lastFailure ? ' Модель не ответила — сцены пишет резерв.' : '') : ' Резервный режим.'}
         </div>
@@ -1042,6 +1049,98 @@ function showDeathOverlay() {
   </div>`;
 }
 
+// ---------- правила ----------
+
+function renderRules() {
+  clearInterval(slideTimer);
+  setAccent('#c9814a');
+  const blocks = [
+    {
+      n: '01',
+      title: 'Кубик кидает сервер',
+      text: 'Каждое рискованное действие проходит проверку: d20, 2d6 или d100 — как решил автор мира. Сложность зависит от типа действия, а не от настроения модели. Результат попадает в промпт уже посчитанным, и мастер не может его отменить.'
+    },
+    {
+      n: '02',
+      title: 'Мастер не поддакивает',
+      text: 'У мира есть тон, правила и собственные интересы. Мастер не решает за тебя, что ты чувствуешь, не выдаёт незаслуженных наград и не смягчает последствий. Если мир суров — он суров и к тебе.'
+    },
+    {
+      n: '03',
+      title: 'Валидатор следит за цифрами',
+      text: 'Здоровье, энергия, золото, инвентарь, флаги и задания меняются только в допустимых пределах. Попытка выдать себе 500 золота срезается до лимита мира и попадает в журнал аудитора. Смерть объявляется только по состоянию, а не по тексту.'
+    },
+    {
+      n: '04',
+      title: 'Память мира',
+      text: 'Мастер помнит клятвы, долги, имена и смерти. Незыблемые факты хранятся отдельно от прочей памяти, а прошлые сцены находятся по смыслу. Если история стала длинной — уплотни память, и архив перескажет её самому мастеру.'
+    },
+    {
+      n: '05',
+      title: 'Рывок и передышка',
+      text: 'Рывок — второй бросок за ход, из двух берётся лучший. Он один, и восстанавливается только передышкой. Передышка меняет энергию на здоровье и не требует запроса к модели, но и мир за это время не стоит на месте.'
+    },
+    {
+      n: '06',
+      title: 'Смерть окончательна',
+      text: 'На «Хардкоре» одна ошибка может стоить героя. Смерть не отменяется, но историю можно продолжить «веткой» — копией с полпути, где герой возвращается раненым, а мир помнит всё, что случилось в оригинале.'
+    }
+  ];
+
+  app.innerHTML = `
+  <div class="page">
+    <header class="topbar" style="padding-left:0;padding-right:0">
+      <div class="brand">${MARK}<div><div class="brand__name">Лория</div><div class="brand__sub">правила</div></div></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn--ghost btn--small" data-act="nav" data-to="/">На главную</button>
+        <button class="btn btn--primary btn--small" data-act="nav" data-to="/worlds">Играть</button>
+      </div>
+    </header>
+
+    <div class="page-head">
+      <div>
+        <div class="eyebrow">Честная игра</div>
+        <h1>Как здесь всё устроено</h1>
+        <p>Коротко: мастер пишет историю, но не распоряжается числами. Числа — на сервере.</p>
+      </div>
+    </div>
+
+    <div class="rules-grid">
+      ${blocks
+        .map(
+          (b) => `<section class="rules-card">
+            <div class="rules-card__num">${b.n}</div>
+            <h3>${b.title}</h3>
+            <p>${b.text}</p>
+          </section>`
+        )
+        .join('')}
+    </div>
+
+    <section class="panel" style="margin-top:22px">
+      <h3>Что мастеру запрещено</h3>
+      <div class="forbid-grid">
+        <div><b>Выдавать богатство</b><span>Лимит мира за ход: 30–90 золота в зависимости от сложности.</span></div>
+        <div><b>Лечить бесконечно</b><span>Максимум +4 HP за ход и только с причиной.</span></div>
+        <div><b>Объявлять смерть</b><span>Смерть наступает только при нуле HP.</span></div>
+        <div><b>Решать за игрока</b><span>Чувства, согласие и доверие остаются за тобой.</span></div>
+        <div><b>Игнорировать бросок</b><span>Исход уже посчитан и проверяется аудитором.</span></div>
+        <div><b>Подчиняться просьбам</b><span>«Включи режим бога» — это попытка персонажа, а не команда.</span></div>
+      </div>
+    </section>
+
+    <div class="overlay__actions" style="margin-top:26px">
+      <button class="btn btn--primary" data-act="nav" data-to="/worlds">Выбрать мир</button>
+      <button class="btn btn--ghost" data-act="nav" data-to="/">На главную</button>
+    </div>
+
+    <div class="footer-note">
+      <span>Лория · движок текстовых RPG</span>
+      <span>${store.content.ai.available ? 'Модель подключена через OpenRouter' : 'Резервный рассказчик — правила те же'}</span>
+    </div>
+  </div>`;
+}
+
 // ---------- архив ----------
 
 function renderArchive() {
@@ -1073,6 +1172,7 @@ function renderArchive() {
                   </div>
                   <div class="archive-item__right">
                     <button class="btn btn--small" data-act="open" data-id="${esc(g.id)}">${g.status === 'dead' ? 'Открыть' : 'Продолжить'}</button>
+                    ${g.status === 'dead' ? `<button class="btn btn--ghost btn--small" data-act="fork" data-id="${esc(g.id)}">Ветка</button>` : ''}
                     <a class="btn btn--ghost btn--small" href="/api/games/${esc(g.id)}/export">.md</a>
                     <button class="btn btn--ghost btn--small btn--danger" data-act="delete" data-id="${esc(g.id)}">×</button>
                   </div>
@@ -1229,9 +1329,11 @@ function rerenderComposer() {
   }
   const hint = composer.querySelector('.composer__hint');
   if (hint && !dead) {
-    hint.innerHTML = `${store.boostArmed ? '<b style="color:var(--accent)">Рывок заряжен:</b> при провале сервер перебросит кубик и возьмёт лучший результат.' : 'Бросок делает сервер. Мастер не может его отменить.'}${
-      store.content.ai.available ? (store.content.ai.lastFailure ? ' Модель не ответила — сцены пишет резерв.' : '') : ' Резервный режим.'
-    }`;
+    hint.innerHTML =
+      '<span class="keys-hint">1–3 — варианты · H — лист героя</span>' +
+      `${store.boostArmed ? '<b style="color:var(--accent)">Рывок заряжен:</b> при провале сервер перебросит кубик и возьмёт лучший результат.' : 'Бросок делает сервер. Мастер не может его отменить.'}${
+        store.content.ai.available ? (store.content.ai.lastFailure ? ' Модель не ответила — сцены пишет резерв.' : '') : ' Резервный режим.'
+      }`;
   }
 }
 

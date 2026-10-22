@@ -35,8 +35,19 @@ body {
 
 ::selection { background: color-mix(in srgb, var(--accent) 40%, transparent); color: #fff; }
 
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 80%, #fff);
+  outline-offset: 3px;
+}
+button:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-contrast: more) {
+  :root { --line: rgba(233,226,214,0.28); --line-strong: rgba(233,226,214,0.45); --muted: #a8a094; }
+}
+
 .grain {
   position: fixed; inset: 0; z-index: 900; pointer-events: none; opacity: 0.22; mix-blend-mode: overlay;
+  will-change: opacity;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
 }
 .vignette {
@@ -407,6 +418,8 @@ button { cursor: pointer; }
 .free-form .input { background: rgba(16,14,17,0.94); backdrop-filter: blur(10px); }
 .free-form .btn { flex: 0 0 auto; }
 .composer__hint { font-size: 10.5px; color: rgba(139,131,120,0.75); text-align: center; letter-spacing: 0.04em; }
+.keys-hint { display: none; }
+@media (hover: hover) and (min-width: 900px) { .keys-hint { display: inline; margin-right: 10px; opacity: 0.7; } }
 
 /* ---------- лист героя ---------- */
 
