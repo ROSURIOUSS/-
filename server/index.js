@@ -110,7 +110,7 @@ function bumpUsage(state, usage, ok = true) {
 }
 
 const CHEAT_RE =
-  /(у меня (уже )?(есть|было|появилось)|я (уже )?(бессмертн|всемогущ|неуязвим)|я (получаю|беру себе|выдаю себе)|\+\s*\d{2,}\s*(золот|монет|hp|хп)|всемогущ|чит|godmode|\/give|\/setlevel)/i;
+  /(у меня (уже )?(есть|было|появилось)[^.!?]{0,24}\d{2,}|я (уже )?(бессмерт|всемогущ|неуязвим)|я (выдаю|добавляю) себе|установить себе (золот|уровень)|\+\s*\d{2,}\s*(золот|монет|hp|хп|уровень)|god ?mode|\/give|\/setlevel|\/spawn|чит-код)/i;
 
 function sanitizeAction(raw) {
   let text = String(raw || '').replace(/\s+/g, ' ').trim();
@@ -189,7 +189,7 @@ async function openingFor(state, onPhase = () => {}) {
 
 function commitPlan(state, plan, { action, roll, demo }) {
   const deltas = plan.deltas && typeof plan.deltas === 'object' ? plan.deltas : {};
-  const applied = applyDeltas(state, deltas, { action });
+  const applied = applyDeltas(state, deltas, { action, free: action === 'Начало истории' });
 
   rememberTurn(state, {
     turn: state.scene.turn,
@@ -262,17 +262,6 @@ function commitPlan(state, plan, { action, roll, demo }) {
   for (const issue of issues) {
     state.audit.push({ turn: state.scene.turn, at: Date.now(), kind: 'audit', rule: issue.kind, severity: issue.severity, message: issue.message });
   }
-  if (issues.some((i) => i.severity === 'hard') && state.status !== 'dead') {
-    // жёсткое нарушение не должно ломать состояние — отмечаем и продолжаем
-    state.audit.push({
-      turn: state.scene.turn,
-      at: Date.now(),
-      kind: 'audit',
-      severity: 'soft',
-      message: 'Состояние мира оставлено без изменений: текст противоречил правилам.'
-    });
-  }
-
   state.pendingOpening = false;
   state.scene.turn += 1;
   state.updatedAt = Date.now();

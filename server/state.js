@@ -140,7 +140,7 @@ export function applyDeltas(state, deltas = {}, options = {}) {
   const actionText = options.action || '';
   const movement = /(иду|бегу|спуска|поднима|путь|дорог|еду|лечу|плыв|пробира|переход|идти)/i.test(actionText);
   const resting = /(отдых|сплю|сон|привал|зализ|перевяз|сижу|жду|дышу|успока|перекус|ем |пью|кофе|чай)/i.test(actionText);
-  let energyCost = diff.energyCost + (movement ? 2 : 0);
+  let energyCost = options.free ? 0 : diff.energyCost + (movement ? 2 : 0);
   if (resting) energyCost -= 8;
   if (Number.isFinite(Number(deltas.energy))) {
     const requested = Math.round(Number(deltas.energy));
@@ -153,7 +153,7 @@ export function applyDeltas(state, deltas = {}, options = {}) {
     }
   }
   // пассивное восстановление: даже в аду иногда дают выдохнуть
-  hero.energy = clamp(hero.energy + 2 - energyCost, 0, hero.maxEnergy);
+  hero.energy = clamp(hero.energy + (options.free ? 0 : 2) - energyCost, 0, hero.maxEnergy);
   state.stats.drained += Math.max(0, energyCost - 2);
 
   // --- Золото ---
