@@ -182,6 +182,12 @@ export function rememberTurn(state, { turn, action, narration, facts, npcs, loca
     location: location || state.scene?.location
   });
 
+  // Короткие «биты» истории: по ним мастер видит, что было только что, не перечитывая прозу.
+  const beat = paragraphs[0] ? paragraphs[0].split(/(?<=[.!?])\s/)[0].slice(0, 180) : '';
+  mem.beats = Array.isArray(mem.beats) ? mem.beats : [];
+  mem.beats.push({ turn: now, action: String(action || '').slice(0, 120), beat });
+  if (mem.beats.length > 60) mem.beats = mem.beats.slice(-60);
+
   // мягкая компакция, чтобы файл не разрастался бесконечно
   if (mem.facts.length > 240) {
     const pinned = mem.facts.filter((f) => f.pinned);

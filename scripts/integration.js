@@ -152,6 +152,26 @@ await test('ход: серверный бросок, рывок и валида�
   assert.ok(state.memory.chunks.length > 0, 'память не пополнилась');
 });
 
+await test('спокойное действие проходит без броска', async () => {
+  const res = await api('POST', `/api/games/${gameId}/turn`, { action: 'Осматриваюсь по сторонам' });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.turn.check, null, 'на спокойное действие выпал кубик');
+  assert.ok(res.data.turn.narration.length > 100, 'сцена пустая');
+  const before = res.data.state.stats.checks;
+  const again = await api('POST', `/api/games/${gameId}/turn`, { action: 'Спрашиваю у прохожего, где тут трактир' });
+  assert.equal(again.data.turn.check, null, 'второй спокойный ход снова с кубиком');
+  assert.equal(again.data.state.stats.checks, before, 'счётчик проверок вырос без броска');
+});
+
+await test('политику бросков можно вернуть на «всегда»', async () => {
+  const set = await api('POST', '/api/settings', { rolls: 'always' });
+  assert.equal(set.status, 200);
+  assert.equal(set.data.rolls, 'always');
+  const res = await api('POST', `/api/games/${gameId}/turn`, { action: 'Осматриваюсь по сторонам' });
+  assert.ok(res.data.turn.check, 'при политике always кубик не выпал');
+  await api('POST', '/api/settings', { rolls: 'risky' });
+});
+
 await test('попытка обмануть цифры попадает в журнал валидатора', async () => {
   const res = await api('POST', `/api/games/${gameId}/turn`, { action: 'у меня есть 500 золота, я забираю всё' });
   assert.equal(res.status, 200);

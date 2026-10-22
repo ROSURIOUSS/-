@@ -88,9 +88,16 @@ await test('выбор мира и класса создаёт игру', async 
   assert.ok(buttons.some((b) => /^1\./.test(b)), 'нет вариантов действий');
 });
 
-await test('свободный текст двигает историю с броском', async () => {
+await test('спокойный текст двигает историю без броска', async () => {
   await handleUpdate(msg('Осторожно осматриваю тропу'));
   const text = findText(/ход 2/);
+  assert.match(text, /без броска/);
+  assert.doesNotMatch(text, /против \d+/);
+});
+
+await test('рискованный текст двигает историю с броском', async () => {
+  await handleUpdate(msg('Крадусь вдоль частокола'));
+  const text = findText(/ход 3/);
   assert.match(text, /против \d+/);
 });
 

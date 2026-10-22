@@ -4,6 +4,7 @@ import { aiAvailable, askJson, AIError } from './ai.js';
 import { buildSystemPrompt, buildTurnPrompt, buildOpeningPrompt, buildCompactionPrompt } from './prompts.js';
 import { retrieve, rememberTurn } from './memory.js';
 import { createGame, serverRoll, applyDeltas, gameOver, makeId, restHero, awardExperience, applyLevelUp, levelChoices } from './state.js';
+import { actionNeedsRoll } from './dice.js';
 import { saveGame } from './store.js';
 import { localAudit, aiAudit } from './auditor.js';
 import { demoOpening, demoTurn } from './demo.js';
@@ -296,8 +297,10 @@ export function commitPlan(state, plan, { action, roll, demo }) {
 
 export async function runTurn(state, action, onPhase = () => {}, { audit = false, boost = false } = {}) {
   pushSnapshot(state);
-  const roll = serverRoll(state, action, undefined, { boost });
-  onPhase('check', { roll });
+  // Кости — только там, где провал действительно что-то меняет.
+  const needsRoll = actionNeedsRoll(action);
+  const roll = needsRoll ? serverRoll(state, action, undefined, { boost }) : null;
+  if (roll) onPhase('check', { roll });
 
   let plan = null;
   let demo = false;
@@ -322,7 +325,7 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
       const scene = await askScene({
         system: buildSystemPrompt(state, retrieved),
         user: buildTurnPrompt(state, { action, roll }),
-        temperature: 0.85,
+        temperature: 0.8,
         maxTokens: 1900,
         minNarration: 120
       });

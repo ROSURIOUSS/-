@@ -82,7 +82,7 @@ export function createGame({ worldId, customWorld, hero: heroInput, difficulty =
       tension: 1,
       lastCheck: null
     },
-    memory: { facts: [], chunks: [], npcs: [], quests: [] },
+    memory: { facts: [], chunks: [], npcs: [], quests: [], beats: [] },
     flags: {},
     stats: { checks: 0, successes: 0, failures: 0, crits: 0, fumbles: 0, deaths: 0, drained: 0 },
     log: [],

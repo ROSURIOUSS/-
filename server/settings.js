@@ -31,6 +31,7 @@ export function applySettings() {
   const s = readSettings();
   if (typeof s.apiKey === 'string' && s.apiKey.trim()) process.env.OPENROUTER_API_KEY = s.apiKey.trim();
   if (typeof s.model === 'string' && s.model.trim()) process.env.LORIA_MODEL = s.model.trim();
+  if (['risky', 'normal', 'always'].includes(s.rolls)) process.env.LORIA_ROLLS = s.rolls;
   return s;
 }
 

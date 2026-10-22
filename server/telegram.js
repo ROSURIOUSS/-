@@ -222,7 +222,11 @@ export function renderScene(state, turn) {
   const header =
     `${WORLD_ICONS[state.world.id] || '🌍'} <b>${esc(state.world.title)}</b>\n` +
     `<i>${esc(state.scene.location)}${state.scene.time ? ` · ${esc(state.scene.time)}` : ''} · ход ${Math.max(1, state.scene.turn - 1)}</i>`;
-  const dice = entry?.check ? `\n${checkLine(entry.check)}` : '';
+  const dice = entry?.check
+    ? `\n${checkLine(entry.check)}`
+    : entry?.turn
+      ? '\n<i>· без броска ·</i>'
+      : '';
   const narration = esc(entry?.narration || '').replace(/\n{3,}/g, '\n\n');
   const limits = (entry?.limits || []).length
     ? `\n\n🩹 <i>Аудитор: ${esc(entry.limits.slice(0, 2).join('; '))}</i>`

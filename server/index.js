@@ -141,6 +141,7 @@ async function handleApi(req, res, url) {
       demo: isDemo(),
       lastFailure: status.lastFailure,
       lastSuccess: status.lastSuccess,
+      rolls: process.env.LORIA_ROLLS || 'risky',
       savedWithApp: Boolean(readSettings().apiKey),
       savedModel: readSettings().model || ''
     };
@@ -164,7 +165,8 @@ async function handleApi(req, res, url) {
     }
     const hasKey = typeof body?.apiKey === 'string';
     const hasModel = typeof body?.model === 'string';
-    if (!hasKey && !hasModel) return json(res, 400, { error: 'Нечего сохранять: нужен ключ или модель.' });
+    const hasRolls = typeof body?.rolls === 'string';
+    if (!hasKey && !hasModel && !hasRolls) return json(res, 400, { error: 'Нечего сохранять: нужен ключ, модель или правило бросков.' });
 
     let keyMaskedNow = null;
     if (hasKey) {
@@ -176,6 +178,17 @@ async function handleApi(req, res, url) {
       process.env.OPENROUTER_API_KEY = key;
       resetCatalogCache();
       keyMaskedNow = maskedKey(key);
+    }
+
+    let rollsNow = null;
+    if (hasRolls) {
+      const rolls = String(body.rolls).trim();
+      if (!['risky', 'normal', 'always'].includes(rolls)) {
+        return json(res, 400, { error: 'Неизвестное правило бросков.' });
+      }
+      saveSettings({ rolls });
+      process.env.LORIA_ROLLS = rolls;
+      rollsNow = rolls;
     }
 
     let modelNow = null;
@@ -201,6 +214,7 @@ async function handleApi(req, res, url) {
       saved: true,
       keyMasked: keyMaskedNow,
       model: modelNow || aiKeyInfo().model,
+      rolls: rollsNow || process.env.LORIA_ROLLS || 'risky',
       ...report
     });
   }

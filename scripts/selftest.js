@@ -10,7 +10,7 @@ const { demoOpening } = await import('../server/demo.js');
 const engine = await import('../server/engine.js');
 const { sanitizeAction, normalizePlan, commitPlan } = engine;
 const { migrate, exportMarkdown } = await import('../server/store.js');
-const { guessStat, actionDifficulty, resolveCheck } = await import('../server/dice.js');
+const { guessStat, actionDifficulty, resolveCheck, actionNeedsRoll } = await import('../server/dice.js');
 const { parseModelJson } = await import('../server/ai.js');
 
 let passed = 0;
@@ -403,6 +403,30 @@ test('сцену достаём и из обёртки {scene:…}, и из choi
   assert.ok(wrapped, 'обёртка не развёрнута');
   assert.equal(wrapped.options.length, 3);
   assert.ok(wrapped.options[0].includes('окна'));
+});
+
+// ---- когда кидать кости ----
+test('спокойные действия идут без броска, рискованные — с броском', () => {
+  assert.equal(actionNeedsRoll('осматриваюсь по сторонам'), false);
+  assert.equal(actionNeedsRoll('иду к воротам'), false);
+  assert.equal(actionNeedsRoll('спрашиваю дорогу у стражника'), false);
+  assert.equal(actionNeedsRoll('перевязываю рану'), false);
+  assert.equal(actionNeedsRoll('жду, пока стемнеет'), false);
+  assert.equal(actionNeedsRoll('иду к замку'), false, '«замок» как место — не риск');
+  assert.equal(actionNeedsRoll('спрашиваю дорогу у торговца'), false, '«торговец» — не торг');
+  assert.equal(actionNeedsRoll('беру блокнот и записываю'), false, '«блокнот» — не блок');
+  assert.equal(actionNeedsRoll('взламываю замок отмычкой'), true);
+  assert.equal(actionNeedsRoll('убеждаю стражника пропустить меня'), true);
+  assert.equal(actionNeedsRoll('крадусь вдоль стены'), true);
+  assert.equal(actionNeedsRoll('прыгаю через провал'), true);
+  assert.equal(actionNeedsRoll('лгу о своём имени'), true);
+});
+
+test('политика бросков переключается', () => {
+  assert.equal(actionNeedsRoll('осматриваюсь', { policy: 'always' }), true);
+  assert.equal(actionNeedsRoll('иду дальше', { policy: 'normal' }), false);
+  assert.equal(actionNeedsRoll('прислушиваюсь к шагам', { policy: 'normal' }), false);
+  assert.equal(actionNeedsRoll('делаю нечто неописанное', { policy: 'normal' }), true);
 });
 
 console.log(`\n  Итог: ${passed} прошло, ${failed} провалилось\n`);

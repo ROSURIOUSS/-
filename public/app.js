@@ -668,7 +668,7 @@ function turnHTML(entry, isFirst, isNew = false) {
   const limits = Array.isArray(entry.limits) ? entry.limits : [];
   return `<article class="turn" data-turn="${entry.turn}" ${isNew ? 'data-new="1"' : ''}>
     <div class="turn__action"><b>Ход ${entry.turn}</b><span>${esc(entry.action)}</span></div>
-    ${entry.check ? checkCard(entry.check) : ''}
+    ${entry.check ? checkCard(entry.check) : isFirst ? '' : '<div class="turn__free">без броска</div>'}
     <div class="narration">${nl2p(entry.narration)}</div>
     ${entry.xp || entry.leveled ? `<div class="turn__tags">
       ${entry.xp ? `<span class="tag tag--xp">+${entry.xp} опыта</span>` : ''}
@@ -1325,6 +1325,10 @@ function aiRowsHTML(d) {
           }`
         : '—'
     ],
+    [
+      'Кости',
+      d.rolls === 'always' ? 'на каждое действие' : d.rolls === 'normal' ? 'на всё, кроме бытового' : 'только на риск'
+    ],
     ['Последний сбой', d.lastFailure ? clampText(d.lastFailure.message, 140) : '—']
   ];
   return `<div class="ai-rows">${rows
@@ -1348,7 +1352,10 @@ async function refreshAIPanel() {
   const body = document.getElementById('ai-panel-body');
   if (!body) return;
   try {
-    body.innerHTML = aiRowsHTML(await api('/api/doctor'));
+    const data = await api('/api/doctor');
+    body.innerHTML = aiRowsHTML(data);
+    const rolls = document.getElementById('ai-rolls');
+    if (rolls && data.rolls) rolls.value = data.rolls;
   } catch (err) {
     body.innerHTML = `<p class="mem-empty">Сервер не ответил: ${esc(err.message)}</p>`;
   }
@@ -1372,6 +1379,16 @@ function showAIPanel() {
         Сильнее модель — плотнее сцены. Бесплатные помечены ·free: они медленнее и иногда рвут JSON.
       </div>
 
+      <label class="eyebrow" for="ai-rolls" style="display:block;margin-top:18px">Кости</label>
+      <select id="ai-rolls" class="input" aria-label="Когда кидать кости">
+        <option value="risky">только на риск — рекомендую</option>
+        <option value="normal">на всё, кроме бытовых действий</option>
+        <option value="always">на каждое действие</option>
+      </select>
+      <div class="composer__hint" style="text-align:left;margin-top:6px">
+        «Только на риск» — обычный разговор, осмотр или дорога идут без кубика.
+      </div>
+
       <label class="eyebrow" for="ai-key" style="display:block;margin-top:18px">Ключ OpenRouter</label>
       <input id="ai-key" class="input" type="password" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false" />
       <div class="composer__hint" style="text-align:left;margin-top:6px">
@@ -1388,6 +1405,7 @@ function showAIPanel() {
   </div>`;
   refreshAIPanel();
   refreshModelList();
+  document.getElementById('ai-rolls')?.addEventListener('change', (e) => saveRollPolicy(e.target.value));
 }
 
 async function refreshModelList() {
@@ -1406,6 +1424,21 @@ async function refreshModelList() {
       .join('');
   } catch (err) {
     select.innerHTML = `<option value="">${esc('Список недоступен: ' + err.message)}</option>`;
+  }
+}
+
+async function saveRollPolicy(rolls) {
+  try {
+    const data = await api('/api/settings', { method: 'POST', body: JSON.stringify({ rolls }) });
+    const label = {
+      risky: 'кости только на риск',
+      normal: 'кости на всё, кроме бытового',
+      always: 'кости на каждое действие'
+    }[data.rolls || rolls];
+    toast(label || 'Правило сохранено');
+    await refreshAIPanel();
+  } catch (err) {
+    toast(err.message, true);
   }
 }
 
@@ -1484,7 +1517,7 @@ function showHelp() {
     <div class="overlay__card" data-stop="1">
       <div class="eyebrow">Подсказка</div>
       <h2>Как играть</h2>
-      <p>Ты описываешь действие — мастер отвечает сценой. Всё, что похоже на риск, решает серверный бросок: модель не может подкрутить цифры. Смерть необратима, но историю можно отмотать на ход назад.</p>
+      <p>Ты описываешь действие — мастер отвечает сценой. Кости кидает сервер и только там, где провал что-то меняет: риск, сопротивление, схватка, обман. Обычные действия просто работают — но мир всё равно может ответить. Смерть необратима, но ход можно отмотать назад.</p>
       <div class="help-rows">
         ${rows.map(([k, v]) => `<div><kbd>${esc(k)}</kbd><span>${esc(v)}</span></div>`).join('')}
       </div>
@@ -1494,6 +1527,25 @@ function showHelp() {
       </div>
     </div>
   </div>`;
+}
+
+function rulesText() {
+  return `Режиссура:
+- Сцена заканчивается на новой возможности или новой проблеме, а не на пустом месте.
+- Мир живёт сам: NPC преследуют свои цели, даже когда герой ничего не делает.
+- Каждый ход сдвигает хотя бы одну линию: задание, отношения, угрозу или долг.
+
+Кости:
+- Риск, сопротивление, схватка, обман — серверный бросок, результат нельзя переписать.
+- Осмотр, разговор, просьба, дорога, перевязка, ожидание — без броска.
+- Правило меняется в панели «Мастер» → «Кости» (риск / всё кроме бытового / каждое действие).
+
+Память:
+- Мастер помнит факты, NPC, задания и короткие итоги последних ходов; при долгой игре помнит сжатые сводки.
+- Противоречия с закреплёнными фактами ловит аудитор и отмечает в сцене.
+
+Смерть и откат:
+- Смерть необратима, но ход можно отмотать назад — история переписывается с того момента.`;
 }
 
 function showRules() {
@@ -1509,6 +1561,11 @@ function showRules() {
       <hr class="rule" />
       <div class="eyebrow" style="margin-bottom:8px">Мир</div>
       <p style="font-size:13.5px;line-height:1.75">${esc(s.world.setting)}</p>
+      <hr class="rule" />
+      <details class="rules-more">
+        <summary>Как работает мастер, кости и память</summary>
+        <p style="white-space:pre-wrap;font-size:13px;line-height:1.75">${esc(rulesText())}</p>
+      </details>
       <div class="overlay__actions">
         <button class="btn" data-act="close-overlay">Закрыть</button>
         <a class="btn btn--ghost" href="/api/games/${esc(s.id)}/export">Скачать хронику</a>

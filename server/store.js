@@ -44,8 +44,8 @@ export function migrate(state) {
     // Берём портрет из каталога архетипов: новые классы не требуют правок миграции.
     hero.portrait = ARCHETYPES.find((a) => a.id === hero.archetypeId)?.portrait || null;
   }
-  state.memory = state.memory || { facts: [], chunks: [], npcs: [], quests: [] };
-  for (const key of ['facts', 'chunks', 'npcs', 'quests']) {
+  state.memory = state.memory || { facts: [], chunks: [], npcs: [], quests: [], beats: [] };
+  for (const key of ['facts', 'chunks', 'npcs', 'quests', 'beats']) {
     if (!Array.isArray(state.memory[key])) state.memory[key] = [];
   }
   state.audit = Array.isArray(state.audit) ? state.audit : [];
@@ -183,11 +183,14 @@ export function exportMarkdown(state) {
   lines.push('');
   lines.push('---');
   lines.push('');
-  for (const entry of state.log || []) {
+  for (const [index, entry] of (state.log || []).entries()) {
     lines.push(`### Ход ${entry.turn}`);
     lines.push('');
     if (entry.check) {
       lines.push(`> Бросок: ${entry.check.stat} · ${entry.check.formula} = **${entry.check.total}** против ${entry.check.dc} — ${entry.check.verdict}`);
+      lines.push('');
+    } else if (index > 0) {
+      lines.push('> Без броска: действие не требовало проверки.');
       lines.push('');
     }
     lines.push(`**Действие:** ${entry.action}`);

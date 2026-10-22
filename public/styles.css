@@ -443,6 +443,10 @@ button { cursor: pointer; }
   background: linear-gradient(90deg, transparent, var(--line), transparent);
 }
 .turn__action b { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 500; white-space: nowrap; }
+.turn__free {
+  font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted);
+  border-left: 2px solid var(--line-strong); padding: 2px 0 2px 10px; margin: -4px 0 12px;
+}
 .turn__action span { font-family: var(--serif); font-size: 15px; color: var(--ink); }
 
 .check-card {
@@ -764,6 +768,16 @@ button { cursor: pointer; }
 
 /* ---------- подсказка ---------- */
 
+.rules-more { margin: 4px 0 6px; }
+.rules-more summary {
+  cursor: pointer; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--muted); padding: 6px 0; list-style: none; display: flex; align-items: center; gap: 8px;
+}
+.rules-more summary::-webkit-details-marker { display: none; }
+.rules-more summary::before { content: '+'; color: var(--accent); font-size: 14px; line-height: 1; }
+.rules-more[open] summary::before { content: '–'; }
+.rules-more summary:hover { color: var(--ink); }
+.rules-more p { color: var(--ink-dim); margin: 4px 0 8px; }
 .help-rows { display: grid; gap: 2px; margin: 18px 0 22px; }
 .help-rows > div {
   display: grid; grid-template-columns: 92px 1fr; gap: 14px; align-items: center;
