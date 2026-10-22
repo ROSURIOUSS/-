@@ -21,8 +21,8 @@ if %NODE_MAJOR% LSS 18 goto old_node
 
 :start_node
 echo.
-echo   Запускаю Лорию. Браузер откроется сам.
-echo   Это окно — сервер игры; закрывать его нельзя.
+echo   Запускаю Лорию — откроется собственное окно игры.
+echo   Это служебное окно; закрывать его нельзя.
 echo.
 node scripts\launcher.js %*
 set "CODE=%ERRORLEVEL%"
@@ -40,6 +40,7 @@ goto no_node
 :start_exe
 echo.
 echo   Запускаю %EXE%
+set "PROMPT="
 start "" "%EXE%"
 exit /b 0
 

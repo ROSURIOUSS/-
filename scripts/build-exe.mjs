@@ -11,6 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +25,14 @@ const DIST = path.join(ROOT, 'release');
 const CACHE = path.join(BUILD, 'cache');
 const FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 const APP_VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+const WEBVIEW_PKG = '@webviewjs/webview-win32-x64-msvc';
+const WEBVIEW_VERSION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(ROOT, 'node_modules', '@webviewjs', 'webview', 'package.json'), 'utf8')).version;
+  } catch {
+    return '0.4.9';
+  }
+})();
 
 const args = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -87,6 +96,7 @@ async function bundle() {
     format: 'cjs',
     target: 'node20',
     outfile,
+    external: ['@webviewjs/webview-*', '*.node'],
     legalComments: 'none',
     logLevel: 'error',
     banner: { js: `// Лория ${APP_VERSION} — автономная сборка` }
@@ -97,13 +107,13 @@ async function bundle() {
 
 // ---------- blob ----------
 
-function makeBlob(main, publicJson) {
+function makeBlob(main, publicJson, extraAssets = {}) {
   const config = {
     main,
     output: path.join(BUILD, 'loria.blob'),
     disableExperimentalSEAWarning: true,
     useCodeCache: false,
-    assets: { 'public.json': publicJson }
+    assets: { 'public.json': publicJson, ...extraAssets }
   };
   const configFile = path.join(BUILD, 'sea-config.json');
   fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
@@ -221,11 +231,56 @@ function inject(baseFile, blobPath, outFile) {
   return outFile;
 }
 
+// Нативное окно для Windows: готовый .node-модуль из npm-пакета платформы.
+function untarFile(tgz, matcher) {
+  const tar = zlib.gunzipSync(tgz);
+  let off = 0;
+  while (off + 512 <= tar.length) {
+    const name = tar.toString('utf8', off, off + 100).replace(/\0.*$/, '');
+    if (!name) break;
+    const size = parseInt(tar.toString('ascii', off + 124, off + 136).trim() || '0', 8);
+    const body = tar.subarray(off + 512, off + 512 + size);
+    if (matcher(name)) return body;
+    off += 512 + Math.ceil(size / 512) * 512;
+  }
+  return null;
+}
+
+async function ensureWinAddon() {
+  const cached = path.join(CACHE, 'webview.win32-x64-msvc.node');
+  if (fs.existsSync(cached)) return cached;
+  const local = path.join(ROOT, 'node_modules', '@webviewjs', 'webview-win32-x64-msvc', 'webview.win32-x64-msvc.node');
+  if (fs.existsSync(local)) return local;
+
+  fs.mkdirSync(CACHE, { recursive: true });
+  const metaUrl = `https://registry.npmjs.org/${WEBVIEW_PKG.replace('/', '%2F')}/${WEBVIEW_VERSION}`;
+  log(`  скачиваю нативное окно ${WEBVIEW_PKG}@${WEBVIEW_VERSION}`);
+  const metaRes = await fetch(metaUrl);
+  if (!metaRes.ok) throw new Error(`Не удалось получить ${metaUrl}: HTTP ${metaRes.status}`);
+  const meta = await metaRes.json();
+  const tarRes = await fetch(meta.dist.tarball);
+  if (!tarRes.ok) throw new Error(`Не удалось скачать ${meta.dist.tarball}: HTTP ${tarRes.status}`);
+  const body = untarFile(Buffer.from(await tarRes.arrayBuffer()), (name) => name.endsWith('.node'));
+  if (!body) throw new Error('В пакете нативного окна нет файла .node');
+  fs.writeFileSync(cached, body);
+  log(`  окно: ${human(body.length)}`);
+  return cached;
+}
+
 async function buildOne(platform, outPath) {
   log(`\nСборка для ${platform === 'win' ? 'Windows x64' : 'Linux x64'}:`);
   const { out: publicJson } = buildPublicManifest();
   const main = await bundle();
-  const blob = makeBlob(main, publicJson);
+  const extra = {};
+  if (platform === 'win') {
+    extra['webview.node'] = await ensureWinAddon();
+    // Рантайм MSVC рядом с нативным модулем: не зависим от установленного VC++ Redistributable.
+    for (const dll of ['vcruntime140.dll', 'vcruntime140_1.dll']) {
+      const file = path.join(ROOT, 'scripts', 'assets', 'win', dll);
+      if (fs.existsSync(file)) extra[dll] = file;
+    }
+  }
+  const blob = makeBlob(main, publicJson, extra);
   const base = await resolveNodeBinary(platform);
   let prepared = base;
   if (platform === 'win') prepared = await decorateWindows(base);

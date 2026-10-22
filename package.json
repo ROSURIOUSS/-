@@ -1,6 +1,6 @@
 {
   "name": "loria-web",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "Лория — хардкорная ИИ-RPG с суверенным Гейм-Мастером, аудитором состояния и памятью мира",
   "type": "module",
   "private": true,
@@ -20,6 +20,7 @@
     "build:exe": "node scripts/build-exe.mjs"
   },
   "devDependencies": {
+    "@webviewjs/webview": "^0.4.9",
     "esbuild": "^0.25.10",
     "pe-library": "^1.0.1",
     "postject": "^1.0.0-alpha.6",

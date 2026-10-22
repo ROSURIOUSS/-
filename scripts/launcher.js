@@ -1,11 +1,13 @@
 // Настольный запуск Лории.
 //
 // Работает в двух режимах:
-//   1) обычный Node: `node scripts/launcher.js` — то же, что `npm start`, но с браузером;
-//   2) собранный .exe (Node SEA): статика распаковывается из самого файла,
+//   1) обычный Node: `node scripts/launcher.js` — то же, что `npm start`, но с окном;
+//   2) собранный .exe (Node SEA): статика и нативное окно распаковываются из самого файла,
 //      сохранения лежат рядом с .exe (или в AppData, если папка только для чтения).
 //
-// Внутри exe нет Node и npm: один файл, двойной клик — игра открылась в браузере.
+// Окно: сначала пробуем настоящее окно приложения (WebView2 через @webviewjs/webview),
+// если не вышло — Edge/Chrome в режиме --app (окно без вкладок и адресной строки),
+// и только в крайнем случае — обычный браузер.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -28,12 +30,32 @@ const IS_SEA = Boolean(sea && typeof sea.isSea === 'function' && sea.isSea());
 
 const cliArgs = new Set(process.argv.slice(IS_SEA ? 1 : 2));
 const NO_OPEN = cliArgs.has('--no-open') || process.env.LORIA_NO_OPEN === '1';
+const FORCE_WEB = cliArgs.has('--web') || process.env.LORIA_WEB === '1';
+const KEEP_CONSOLE = cliArgs.has('--console') || Boolean(process.env.PROMPT);
+const HIDDEN = process.env.LORIA_HIDDEN === '1';
 
 const exeDir = IS_SEA ? path.dirname(process.execPath) : path.resolve(process.cwd());
 const appDataRoot = process.env.LOCALAPPDATA || process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
 const storeRoot = path.join(appDataRoot, 'Loria');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ---------- скрыть консоль при запуске двойным кликом ----------
+
+if (IS_SEA && process.platform === 'win32' && !HIDDEN && !KEEP_CONSOLE) {
+  try {
+    const child = spawn(process.execPath, process.argv.slice(1), {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { ...process.env, LORIA_HIDDEN: '1' }
+    });
+    child.unref();
+    process.exit(0);
+  } catch {
+    /* не получилось — работаем как есть */
+  }
+}
 
 function canWrite(dir) {
   const probe = path.join(dir, `.loria-write-${process.pid}`);
@@ -54,9 +76,7 @@ function ensureDir(dir) {
 // ---------- где живут сохранения ----------
 
 const portable = IS_SEA && canWrite(exeDir);
-const HOME = path.resolve(
-  process.env.LORIA_HOME || (IS_SEA ? (portable ? exeDir : storeRoot) : exeDir)
-);
+const HOME = path.resolve(process.env.LORIA_HOME || (IS_SEA ? (portable ? exeDir : storeRoot) : exeDir));
 const dataDir = path.resolve(process.env.LORIA_DATA_DIR || path.join(HOME, 'data'));
 
 // .env читаем сначала рядом с exe (и на уровень выше — удобно при сборке из репозитория),
@@ -68,6 +88,35 @@ if (HOME !== exeDir) loadEnv(path.join(HOME, '.env'));
 if (process.env.LORIA_DEBUG) {
   const parentEnv = path.join(exeDir, '..', '.env');
   console.log('[debug] exeDir=%s cwd=%s parent=%s exists=%s key=%s', exeDir, process.cwd(), parentEnv, fs.existsSync(parentEnv), process.env.OPENROUTER_API_KEY ? 'set' : 'empty');
+}
+
+// В скрытом режиме консоли нет: пишем лог в файл, чтобы было что смотреть при сбое.
+const logFile = HIDDEN ? path.join(HOME, 'loria.log') : null;
+if (logFile) {
+  try {
+    fs.appendFileSync(logFile, `\n--- ${new Date().toISOString()} — запуск ---\n`);
+  } catch {
+    /* папка только для чтения */
+  }
+  for (const level of ['log', 'info', 'warn', 'error']) {
+    const original = console[level].bind(console);
+    console[level] = (...args) => {
+      try {
+        fs.appendFileSync(logFile, args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ') + '\n');
+      } catch {
+        /* игнорируем */
+      }
+      void original;
+    };
+  }
+  process.on('uncaughtException', (err) => {
+    try {
+      fs.appendFileSync(logFile, '[uncaught] ' + (err?.stack || err) + '\n');
+    } catch {
+      /* игнорируем */
+    }
+    process.exit(1);
+  });
 }
 
 // ---------- встроенная статика ----------
@@ -93,12 +142,35 @@ function extractAssets() {
         }
         fs.writeFileSync(path.join(target, '.build'), manifest.build);
       }
+      writeNativeAddon(target);
       return target;
     } catch {
       /* пробуем следующий вариант */
     }
   }
   throw new Error('Не удалось распаковать файлы интерфейса');
+}
+
+// Нативное окно — отдельный .node-модуль: его нельзя загрузить из памяти,
+// поэтому кладём рядом с интерфейсом.
+function writeNativeAddon(dir) {
+  if (process.platform !== 'win32') return null;
+  const files = ['webview.node', 'vcruntime140.dll', 'vcruntime140_1.dll'];
+  for (const name of files) {
+    const file = path.join(dir, name);
+    if (fs.existsSync(file)) continue;
+    try {
+      fs.writeFileSync(file, Buffer.from(sea.getAsset(name)));
+    } catch {
+      if (name === 'webview.node') return null;
+    }
+  }
+  const addon = path.join(dir, 'webview.node');
+  if (!fs.existsSync(addon)) return null;
+  // libuv грузит .node с LOAD_WITH_ALTERED_SEARCH_PATH (своя папка в приоритете),
+  // но PATH не помешает — на случай другой сборки Node.
+  process.env.PATH = dir + path.delimiter + (process.env.PATH || '');
+  return addon;
 }
 
 function writeEnvExample() {
@@ -153,10 +225,80 @@ async function pickPort(start) {
   return start;
 }
 
-// ---------- браузер ----------
+// ---------- окно ----------
+
+let nativeApp = null;
+let stopApp = () => process.exit(0);
+
+function findChromium() {
+  if (process.platform !== 'win32') return null;
+  const roots = [
+    process.env.PROGRAMFILES,
+    process.env['PROGRAMFILES(X86)'],
+    process.env.ProgramW6432,
+    process.env.LOCALAPPDATA
+  ].filter(Boolean);
+  const rels = ['Microsoft\\Edge\\Application\\msedge.exe', 'Google\\Chrome\\Application\\chrome.exe'];
+  for (const root of roots) {
+    for (const rel of rels) {
+      const file = path.join(root, rel);
+      if (fs.existsSync(file)) return file;
+    }
+  }
+  return null;
+}
+
+// Своё окно: WebView2 внутри процесса, без браузерной обвязки.
+async function openNativeWindow(url) {
+  if (FORCE_WEB) return false;
+  if (IS_SEA && process.platform !== 'win32') return false;
+  const addon = process.env.LORIA_WEBVIEW_MODULE || (IS_SEA ? path.join(process.env.LORIA_PUBLIC_DIR || '', 'webview.node') : '');
+  if (IS_SEA) {
+    if (!addon || !fs.existsSync(addon)) return false;
+    process.env.NAPI_RS_NATIVE_LIBRARY_PATH = addon;
+  }
+
+  const { Application } = await import('@webviewjs/webview');
+  const app = new Application();
+  const win = app.createBrowserWindow({ title: 'Лория', width: 1280, height: 860, resizable: true });
+  try {
+    win.setMinSize(980, 640);
+  } catch {
+    /* не критично */
+  }
+  win.createWebview({ url });
+  app.on('application-close-requested', () => {
+    try {
+      app.exit();
+    } catch {
+      /* уже закрыто */
+    }
+    stopApp(0);
+  });
+  app.run({ interval: 16 });
+  nativeApp = app;
+  return true;
+}
+
+// Запасной вариант: Edge или Chrome как отдельное окно приложения.
+function openAppBrowser(url) {
+  const exe = findChromium();
+  if (!exe) return false;
+  try {
+    const child = spawn(exe, [`--app=${url}`, '--window-size=1280,860', '--no-first-run'], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    child.on('error', () => {});
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function openBrowser(url) {
-  if (NO_OPEN) return;
   const options = { detached: true, stdio: 'ignore', windowsHide: true };
   try {
     let child;
@@ -188,6 +330,26 @@ function line(text = '') {
   console.log(text);
 }
 
+// В скрытом режиме консоли нет — о сбое сообщаем окном Windows.
+function showFatal(text) {
+  if (process.platform === 'win32' && HIDDEN) {
+    try {
+      const script = `Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show(${JSON.stringify(text)}, 'Лория', 'OK', 'Error')`;
+      const child = spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', script], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true
+      });
+      child.on('error', () => {});
+      child.unref();
+      return;
+    } catch {
+      /* остаётся лог */
+    }
+  }
+  console.error(text);
+}
+
 async function main() {
   process.title = 'Лория';
   ensureDir(path.join(dataDir, 'games'));
@@ -213,18 +375,48 @@ async function main() {
   line('  ЛОРИЯ — настольный запуск');
   line(`  сохранения: ${dataDir}`);
   line(`  адрес:      http://127.0.0.1:${port}`);
-  line('  окно можно свернуть, но не закрывать: закроешь — игра остановится.');
   line('');
 
   const app = await import('../server/index.js');
   const url = `http://127.0.0.1:${port}`;
   const alive = await waitForServer(url);
 
+  let stopping = false;
+  const stop = async (code = 0) => {
+    if (stopping) return;
+    stopping = true;
+    line('');
+    line('  Останавливаю Лорию…');
+    try {
+      nativeApp?.exit?.();
+    } catch {
+      /* уже закрыто */
+    }
+    try {
+      app?.server?.close();
+    } catch {
+      /* уже закрыт */
+    }
+    await sleep(150);
+    process.exit(code);
+  };
+  stopApp = stop;
+
   if (alive) {
-    if (!NO_OPEN) line('  Открываю браузер…');
-    openBrowser(url);
+    if (!NO_OPEN) {
+      let opened = false;
+      try {
+        opened = await openNativeWindow(url);
+      } catch (err) {
+        line(`  Окно приложения не открылось (${err?.message || err}) — пробую Edge.`);
+      }
+      if (!opened && !FORCE_WEB) opened = openAppBrowser(url);
+      if (!opened) openBrowser(url);
+      line(opened ? '  Окно открыто.' : '  Открой адрес вручную.');
+    }
   } else {
     line('  Сервер не ответил. Открой адрес вручную, если он всё-таки поднялся.');
+    if (HIDDEN) showFatal(`Сервер не ответил. Открой адрес вручную: ${url}\nЛог: ${logFile}`);
   }
 
   if (process.env.TELEGRAM_BOT_TOKEN) {
@@ -237,23 +429,8 @@ async function main() {
   }
 
   line('');
-  line('  Чтобы остановить — закрой это окно или нажми Ctrl+C.');
+  line('  Чтобы остановить — закрой окно игры или нажми Ctrl+C.');
   line('');
-
-  let stopping = false;
-  const stop = async (code = 0) => {
-    if (stopping) return;
-    stopping = true;
-    line('');
-    line('  Останавливаю Лорию…');
-    try {
-      app?.server?.close();
-    } catch {
-      /* уже закрыт */
-    }
-    await sleep(150);
-    process.exit(code);
-  };
 
   process.on('SIGINT', () => stop(0));
   process.on('SIGTERM', () => stop(0));
@@ -261,11 +438,14 @@ async function main() {
 }
 
 main().catch(async (err) => {
+  const text = err?.stack || err?.message || String(err);
   console.error('');
   console.error('  Не удалось запустить Лорию.');
-  console.error('  ' + (err?.stack || err?.message || err));
+  console.error('  ' + text);
   console.error('');
-  if (process.stdin.isTTY) {
+  if (HIDDEN) {
+    showFatal(`Лория не запустилась.\n\n${err?.message || err}\n\nЛог: ${logFile}`);
+  } else if (process.stdin.isTTY) {
     console.error('  Нажми Enter, чтобы закрыть окно.');
     await new Promise((resolve) => process.stdin.once('data', resolve));
   }
