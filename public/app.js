@@ -1386,13 +1386,7 @@ app.addEventListener('click', async (e) => {
     return;
   }
   if (act === 'reload') {
-    if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-  });
-}
-
-boot();
+    boot();
   }
 });
 
