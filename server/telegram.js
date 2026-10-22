@@ -4,6 +4,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { TELEGRAM_TOKEN, HOSTED_URL } from './config.js';
+
+const OPENROUTER_BASE = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
 import { PRESETS, ARCHETYPES, DIFFICULTIES } from './worlds.js';
 import { loadGame, exportMarkdown } from './store.js';
 import { startNewGame, runTurn, sanitizeAction, noteCheatAttempt, DEMO_MODE } from './engine.js';
@@ -68,6 +70,22 @@ async function send(chatId, html, keyboard) {
     disable_web_page_preview: true,
     ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {})
   });
+}
+
+/** Фото с подписью; если Telegram не смог — отправляем текстом. */
+async function sendPhoto(chatId, photoPath, caption, keyboard) {
+  const photo = `${HOSTED_URL || ''}${photoPath}`;
+  const ok = HOSTED_URL
+    ? await tg('sendPhoto', {
+        chat_id: chatId,
+        photo,
+        caption: caption.slice(0, 1024),
+        parse_mode: 'HTML',
+        ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {})
+      })
+    : null;
+  if (ok) return ok;
+  return send(chatId, caption, keyboard);
 }
 
 /** Длинный текст несколькими сообщениями (лимит Telegram — 4096 символов). */
@@ -164,6 +182,11 @@ function optionsKeyboard(state) {
     { text: '⚡ Рывок', callback_data: 'boost' },
     { text: '📜 Хроника', callback_data: 'export' }
   ]);
+  rows.push([
+    { text: '↩️ Отменить ход', callback_data: 'rewind' },
+    { text: '🛡 Аудит', callback_data: 'audit' },
+    { text: '🗺 Другой мир', callback_data: 'new' }
+  ]);
   return rows;
 }
 
@@ -218,7 +241,11 @@ function heroText(state) {
 async function beginWorld(chatId, worldId, userName) {
   const world = PRESETS.find((w) => w.id === worldId);
   if (!world) return send(chatId, 'Такого мира нет. /new — выбрать заново.');
-  await send(chatId, `🌍 <b>${esc(world.title)}</b>\n<i>${esc(world.genre)}</i>\n\n${esc(world.pitch)}\n\nКто ты в этом мире?`, archetypesKeyboard(worldId));
+  const caption =
+    `🌍 <b>${esc(world.title)}</b>\n<i>${esc(world.genre)}</i>\n\n${esc(world.pitch)}\n\n` +
+    `🎲 ${esc((world.rules.match(/СИСТЕМА:\s*([a-z0-9%]+)/i)?.[1] || 'd20').toUpperCase())} · ` +
+    `правила мира мастер соблюдает буквально.\n\nКто ты в этом мире?`;
+  await sendPhoto(chatId, world.art, caption, archetypesKeyboard(worldId));
 }
 
 async function createGame(chatId, worldId, archetypeId, userName) {
@@ -260,6 +287,41 @@ async function createGame(chatId, worldId, archetypeId, userName) {
   } finally {
     locks.delete(`new:${chatId}`);
   }
+}
+
+async function handleVoice(chatId, msg) {
+  const fileId = msg.voice?.file_id;
+  if (!fileId) return;
+  const s = session(chatId);
+  const state = s.gameId ? await loadGame(s.gameId) : null;
+  if (!state) return send(chatId, 'Сначала выбери мир.', worldsKeyboard());
+
+  let recognized = '';
+  try {
+    const res = await fetch(`${API()}/getFile?file_id=${encodeURIComponent(fileId)}`);
+    const data = await res.json();
+    const filePath = data?.result?.file_path;
+    if (!filePath) throw new Error('нет пути к файлу');
+    const fileRes = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`);
+    if (!fileRes.ok) throw new Error(`файл не скачался: ${fileRes.status}`);
+    const form = new FormData();
+    form.append('file', new Blob([Buffer.from(await fileRes.arrayBuffer())], { type: 'audio/ogg' }), 'voice.ogg');
+    form.append('model', process.env.LORIA_STT_MODEL || 'openai/whisper-1');
+    const stt = await fetch(`${OPENROUTER_BASE}/audio/transcriptions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` },
+      body: form
+    });
+    const json = await stt.json().catch(() => ({}));
+    recognized = String(json.text || json?.choices?.[0]?.message?.content || '').trim();
+    if (!stt.ok) throw new Error(json?.error?.message || `STT ${stt.status}`);
+  } catch (err) {
+    console.error('[bot] voice:', err?.message);
+    return send(chatId, '🎙 Голос не разобрать. Напиши действие текстом — это надёжнее.');
+  }
+  if (!recognized) return send(chatId, '🎙 Не расслышал. Попробуй ещё раз или напиши текстом.');
+  await send(chatId, `🎙 <i>«${esc(recognized.slice(0, 300))}»</i>`);
+  return makeTurn(chatId, recognized);
 }
 
 async function makeTurn(chatId, action) {
@@ -343,6 +405,8 @@ const HELP = `<b>Как играть</b>
 3. Каждое рискованное действие проверяется серверным броском. Мастер не может его отменить.
 4. Смерть окончательна. Мир помнит твои клятвы и долги.
 
+Можно говорить голосом: отправь голосовое, и мастер его разберёт.
+
 Команды:
 /hero — лист героя
 /audit — проверить последний ход
@@ -376,6 +440,22 @@ export async function handleUpdate(update) {
     if (data.startsWith('a:')) {
       const [, worldId, archetypeId] = data.split(':');
       return createGame(chatId, worldId, archetypeId, cq.from?.first_name);
+    }
+    if (data === 'rewind') {
+      const { rewind } = await import('./engine.js');
+      const s = session(chatId);
+      const state = s.gameId ? await loadGame(s.gameId) : null;
+      if (!state) return send(chatId, 'Истории пока нет. /new');
+      try {
+        const result = await rewind(state);
+        return send(
+          chatId,
+          `↩️ Ход ${result.undoneTurn} отменён.\n\n${renderScene(result.state)}`.slice(0, 4096),
+          optionsKeyboard(result.state)
+        );
+      } catch (err) {
+        return send(chatId, '↩️ ' + esc(err?.message || 'Отмена не удалась'));
+      }
     }
     if (data === 'hero' || data === 'audit' || data === 'export' || data === 'boost') {
       const s = session(chatId);
@@ -412,7 +492,17 @@ export async function handleUpdate(update) {
   }
 
   const msg = update.message;
-  if (!msg || !msg.text) return;
+  if (!msg) return;
+  if (msg.voice) {
+    const chatId = msg.chat.id;
+    if (msg.chat.type !== 'private') return send(chatId, 'Лория ведёт историю один на один.');
+    const now = Date.now();
+    const lastAt = cooldown.get(chatId) || 0;
+    if (now - lastAt < 1500) return;
+    cooldown.set(chatId, now);
+    return handleVoice(chatId, msg);
+  }
+  if (!msg.text) return;
   const chatId = msg.chat.id;
   const text = String(msg.text).trim();
   const fromName = msg.from?.first_name || msg.from?.username || 'Безымянный';

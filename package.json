@@ -1,6 +1,6 @@
 {
   "name": "loria-web",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Лория — хардкорная ИИ-RPG с суверенным Гейм-Мастером, аудитором состояния и памятью мира",
   "type": "module",
   "private": true,
@@ -13,6 +13,7 @@
     "doctor": "node scripts/doctor.js",
     "bot": "node server/telegram.js",
     "test": "node scripts/selftest.js",
-    "e2e": "node scripts/integration.js"
+    "e2e": "node scripts/integration.js",
+    "check": "npm test && npm run e2e"
   }
 }
