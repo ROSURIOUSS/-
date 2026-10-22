@@ -1,0 +1,23 @@
+services:
+  loria:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - loria-data:/app/data
+    restart: unless-stopped
+
+  # Telegram-бот на том же движке. Включается, если задан TELEGRAM_BOT_TOKEN.
+  loria-bot:
+    build: .
+    command: ["node", "server/telegram.js"]
+    env_file:
+      - .env
+    volumes:
+      - loria-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  loria-data:
