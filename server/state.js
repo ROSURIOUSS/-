@@ -39,8 +39,11 @@ export function makeHero({ name, archetypeId, traitId, burdenId, custom }) {
     energy: 24,
     maxEnergy: 24,
     gold: 15,
+    portrait: archetype.portrait,
     items: [...archetype.items],
     conditions: [],
+    boosts: 1,
+    maxBoosts: 1,
     alive: true
   };
 }
@@ -85,19 +88,71 @@ export function createGame({ worldId, customWorld, hero: heroInput, difficulty =
 }
 
 /** Собирает броско́к под основное рискованное действие хода. */
-export function serverRoll(state, action, hint) {
+export function serverRoll(state, action, hint, { boost = false } = {}) {
   const system = state.world?.system || 'd20';
   const sys = systemInfo(system);
   const stat = STATS.includes(hint?.stat) ? hint.stat : guessStat(action, state.hero);
   const statValue = num(state.hero?.stats?.[stat], 4);
   const fatigue = (state.hero?.energy ?? 10) <= 5 || (state.hero?.conditions || []).includes('Истощён');
-  const roll = rollCheck({ system, stat, statValue, fatigue });
+  let roll = rollCheck({ system, stat, statValue, fatigue });
+  let boosted = false;
+  if (boost && (state.hero.boosts || 0) > 0) {
+    const second = rollCheck({ system, stat, statValue, fatigue });
+    if (second.total > roll.total) {
+      roll = { ...second, rerolledFrom: roll };
+      boosted = true;
+    } else {
+      roll = { ...roll, rerolledFrom: second };
+      boosted = true;
+    }
+    state.hero.boosts = Math.max(0, (state.hero.boosts || 0) - 1);
+    hero_boost_spent(state);
+  }
   const suggestedDc = hint?.dc;
   const dc = Number.isFinite(Number(suggestedDc))
     ? clamp(Math.round(Number(suggestedDc)), sys.dc.easy - 2, sys.dc.extreme + 2)
     : actionDifficulty(action, system);
   const resolution = resolveCheck(roll, dc);
-  return { ...roll, ...resolution };
+  return { ...roll, ...resolution, boosted };
+}
+
+function hero_boost_spent(state) {
+  state.audit.push({
+    turn: state.scene.turn,
+    at: Date.now(),
+    kind: 'boost',
+    severity: 'soft',
+    message: 'Рывок: второй бросок, взят лучший результат. Ещё один рывок — после отдыха.'
+  });
+}
+
+/** Передышка: энергия в здоровье, без обращения к модели. */
+export function restHero(state) {
+  const hero = state.hero;
+  if (state.status === 'dead') return { error: 'Герой мёртв.' };
+  if (hero.energy < 6) return { error: 'Не хватает энергии даже на передышку.' };
+  const fullHp = hero.hp >= hero.maxHp && hero.conditions.length === 0;
+  const boostReady = (hero.boosts || 0) >= (hero.maxBoosts || 1);
+  if (fullHp && boostReady) return { error: 'Герой в порядке, рывок готов. Передышка пока не нужна.' };
+
+  const before = hero.hp;
+  hero.energy = Math.max(0, hero.energy - 6);
+  hero.hp = Math.min(hero.maxHp, hero.hp + 4);
+  if (hero.conditions.includes('Истощён')) hero.conditions = hero.conditions.filter((c) => c !== 'Истощён');
+  if (hero.hp > 8 && hero.conditions.includes('На волоске')) {
+    hero.conditions = hero.conditions.filter((c) => c !== 'На волоске');
+  }
+  if (hero.boosts < hero.maxBoosts) hero.boosts = hero.maxBoosts;
+  state.scene.turn += 1;
+  state.audit.push({
+    turn: state.scene.turn,
+    at: Date.now(),
+    kind: 'rest',
+    severity: 'soft',
+    message: `Передышка: HP ${before} → ${hero.hp}, энергия −6. Рывок восстановлен.`
+  });
+  state.updatedAt = Date.now();
+  return { ok: true, hp: hero.hp, energy: hero.energy };
 }
 
 function pushAudit(state, entry) {

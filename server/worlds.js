@@ -4,6 +4,7 @@
 export const ARCHETYPES = [
   {
     id: 'soldier',
+    portrait: '/art/hero-soldier.jpg',
     name: 'Наёмник',
     tagline: 'Ты умеешь убивать и знаешь цену этому.',
     stats: { Сила: 6, Ловкость: 5, Разум: 3, Воля: 5, Харизма: 3 },
@@ -12,6 +13,7 @@ export const ARCHETYPES = [
   },
   {
     id: 'thief',
+    portrait: '/art/hero-thief.jpg',
     name: 'Тень',
     tagline: 'Ты входишь туда, где двери заперты, и выходишь без следов.',
     stats: { Сила: 3, Ловкость: 7, Разум: 5, Воля: 3, Харизма: 4 },
@@ -20,6 +22,7 @@ export const ARCHETYPES = [
   },
   {
     id: 'scholar',
+    portrait: '/art/hero-scholar.jpg',
     name: 'Книжник',
     tagline: 'Ты читал о том, что другие предпочли забыть.',
     stats: { Сила: 3, Ловкость: 4, Разум: 7, Воля: 5, Харизма: 3 },
@@ -28,6 +31,7 @@ export const ARCHETYPES = [
   },
   {
     id: 'speaker',
+    portrait: '/art/hero-speaker.jpg',
     name: 'Голос',
     tagline: 'Ты умеешь так соврать, что тебе поверят даже боги.',
     stats: { Сила: 3, Ловкость: 4, Разум: 5, Воля: 4, Харизма: 7 },
@@ -36,6 +40,7 @@ export const ARCHETYPES = [
   },
   {
     id: 'medic',
+    portrait: '/art/hero-medic.jpg',
     name: 'Лекарь',
     tagline: 'Ты умеешь удерживать людей в этом мире. Иногда — против их воли.',
     stats: { Сила: 4, Ловкость: 5, Разум: 6, Воля: 5, Харизма: 4 },

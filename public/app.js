@@ -13,7 +13,8 @@ const store = {
   busy: false,
   tab: 'facts',
   lastTurn: null,
-  rollMemory: null
+  rollMemory: null,
+  boostArmed: false
 };
 
 const STAT_SHORT = { Сила: 'Сила', Ловкость: 'Ловк', Разум: 'Разум', Воля: 'Воля', Харизма: 'Хар' };
@@ -364,6 +365,7 @@ function renderBuilder() {
               .map(
                 (a) => `
               <button class="arch ${a.id === d.archetypeId ? 'is-active' : ''}" data-act="pick-arch" data-id="${esc(a.id)}">
+                ${a.portrait ? `<span class="arch__portrait"><img src="${esc(a.portrait)}" alt="" loading="lazy" /></span>` : ''}
                 <span class="arch__name">${esc(a.name)}</span>
                 <span class="arch__tag">${esc(a.tagline)}</span>
                 <span class="arch__stats">
@@ -458,7 +460,7 @@ function renderBuilder() {
           <div class="eyebrow">Твой герой</div>
           <div class="preview-hero__name">${esc(d.name || 'Безымянный')}</div>
           <div class="preview-hero__role">${esc(arch.name)} · ${esc(diff.name)}</div>
-          <div class="preview-hero__art" style="background-image:url('${esc(world.art)}')"></div>
+          <div class="preview-hero__art" style="background-image:url('${esc(arch.portrait || world.art)}')"></div>
           <div class="kv"><span>Здоровье</span><b>${hp}</b></div>
           <div class="kv"><span>Энергия</span><b>24</b></div>
           <div class="kv"><span>Золото</span><b>15</b></div>
@@ -569,9 +571,13 @@ async function openGame(id) {
 function checkCard(check) {
   const cls = check.success ? 'is-success' : 'is-fail';
   const verdict = check.critical ? 'критический успех' : check.fumble ? 'критический провал' : check.verdict;
+  const boost = check.boosted
+    ? `<span class="check-card__boost" title="Рывок: второй бросок, взят лучший">рывок${check.rerolledFrom ? ` · было ${check.rerolledFrom.total}` : ''}</span>`
+    : '';
   return `<div class="check-card ${cls}">
     <span class="check-card__die"><b>${esc(check.dice?.join('+') || '—')}</b></span>
     <span>${esc(check.stat)} · ${esc(check.formula)} = <b style="color:var(--ink)">${check.total}</b> / сложность ${check.dc}</span>
+    ${boost}
     <span class="check-card__verdict">${esc(verdict)}</span>
   </div>`;
 }
@@ -646,9 +652,15 @@ function renderPlay(data) {
         </div>
         <div class="free-form">
           <input class="input" id="free-action" maxlength="600" placeholder="${dead ? 'История окончена' : 'Или напиши своё действие...'}" ${dead ? 'disabled' : ''} />
+          ${dead ? '' : `<button class="btn btn--boost ${hero.boosts > 0 ? '' : 'is-spent'}" data-act="toggle-boost" title="Второй бросок за ход, берётся лучший">
+            <span>Рывок</span><b>${hero.boosts}/${hero.maxBoosts || 1}</b>
+          </button>`}
           <button class="btn btn--primary" data-act="submit-free" ${dead ? 'disabled' : ''}><span>Действовать</span>↵</button>
         </div>
-        <div class="composer__hint">Бросок делает сервер. Мастер не может его отменить. ${store.content.ai.available ? (store.content.ai.lastFailure ? 'Модель не ответила — сцены пишет резерв.' : '') : 'Резервный режим.'}</div>
+        <div class="composer__hint">
+          ${store.boostArmed ? '<b style="color:var(--accent)">Рывок заряжен:</b> при провале сервер перебросит кубик и возьмёт лучший результат.' : 'Бросок делает сервер. Мастер не может его отменить.'}
+          ${store.content.ai.available ? (store.content.ai.lastFailure ? ' Модель не ответила — сцены пишет резерв.' : '') : ' Резервный режим.'}
+        </div>
       </div>
     </footer>
   </div>`;
@@ -678,9 +690,12 @@ function sheetHTML() {
 
   return `
     <div class="sheet-head">
-      <div>
-        <div class="sheet-name">${esc(hero.name)}</div>
-        <div class="sheet-role">${esc(hero.archetype)}</div>
+      <div style="display:flex;align-items:center;gap:12px;min-width:0">
+        ${hero.portrait ? `<img class="sheet-avatar" src="${esc(hero.portrait)}" alt="" />` : ''}
+        <div style="min-width:0">
+          <div class="sheet-name">${esc(hero.name)}</div>
+          <div class="sheet-role">${esc(hero.archetype)}</div>
+        </div>
       </div>
       <button class="btn btn--ghost btn--small sheet-close" data-act="toggle-sheet">×</button>
     </div>
@@ -689,6 +704,17 @@ function sheetHTML() {
       <div class="bar"><span class="bar__label">HP</span><span class="bar__track"><i class="bar__fill bar__fill--hp" style="width:${hpPct}%"></i></span><span class="bar__val">${hero.hp}/${hero.maxHp}</span></div>
       <div class="bar"><span class="bar__label">Энер</span><span class="bar__track"><i class="bar__fill bar__fill--en" style="width:${enPct}%"></i></span><span class="bar__val">${hero.energy}/${hero.maxEnergy}</span></div>
       <div class="bar"><span class="bar__label">Золото</span><span class="bar__track"><i class="bar__fill bar__fill--gold" style="width:${goldPct}%"></i></span><span class="bar__val">${hero.gold}</span></div>
+    </div>
+
+    <div class="sheet-block">
+      <div style="display:flex;gap:8px">
+        <button class="btn btn--small btn--rest" style="flex:1" data-act="rest" ${hero.energy < 6 ? 'disabled' : ''}>
+          Передышка <b>−6⚡ / +4❤</b>
+        </button>
+        <button class="btn btn--small btn--boost ${hero.boosts > 0 ? '' : 'is-spent'}" style="flex:0 0 auto" data-act="toggle-boost" ${hero.boosts > 0 ? '' : 'disabled'}>
+          Рывок <b>${hero.boosts}/${hero.maxBoosts || 1}</b>
+        </button>
+      </div>
     </div>
 
     <div class="sheet-block">
@@ -828,7 +854,7 @@ async function submitAction(action) {
     const res = await fetch(`/api/games/${store.game.id}/turn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify({ action })
+      body: JSON.stringify({ action, boost: Boolean(store.boostArmed) })
     });
 
     if (!res.ok) {
@@ -887,6 +913,7 @@ async function submitAction(action) {
 
 function finishTurn(payload) {
   document.getElementById('typing-indicator')?.remove();
+  store.boostArmed = false;
   store.game = payload.state;
   store.meta = { ...(store.meta || {}), memoryIndex: payload.memoryIndex };
 
@@ -1141,12 +1168,27 @@ app.addEventListener('click', async (e) => {
     await compactMemory();
     return;
   }
+  if (act === 'toggle-boost') {
+    const hero = store.game?.hero;
+    if (!hero || hero.boosts <= 0) return toast('Рывок израсходован. Нужна передышка.', true);
+    store.boostArmed = !store.boostArmed;
+    rerenderComposer();
+    return;
+  }
+  if (act === 'rest') {
+    await takeRest();
+    return;
+  }
   if (act === 'death-screen') {
     showDeathOverlay();
     return;
   }
   if (act === 'close-overlay') {
     hideOverlay();
+    return;
+  }
+  if (act === 'fork') {
+    await forkStory(el.dataset.id);
     return;
   }
   if (act === 'delete') {
@@ -1173,6 +1215,42 @@ overlayRoot.addEventListener('click', (e) => {
   }
 });
 
+function rerenderComposer() {
+  const composer = document.getElementById('composer');
+  if (!composer || !store.game) return;
+  const hero = store.game.hero;
+  const dead = store.game.status === 'dead';
+  const boostBtn = composer.querySelector('[data-act="toggle-boost"]');
+  if (boostBtn) {
+    boostBtn.classList.toggle('is-armed', store.boostArmed);
+    boostBtn.classList.toggle('is-spent', hero.boosts <= 0);
+    const counter = boostBtn.querySelector('b');
+    if (counter) counter.textContent = `${hero.boosts}/${hero.maxBoosts || 1}`;
+  }
+  const hint = composer.querySelector('.composer__hint');
+  if (hint && !dead) {
+    hint.innerHTML = `${store.boostArmed ? '<b style="color:var(--accent)">Рывок заряжен:</b> при провале сервер перебросит кубик и возьмёт лучший результат.' : 'Бросок делает сервер. Мастер не может его отменить.'}${
+      store.content.ai.available ? (store.content.ai.lastFailure ? ' Модель не ответила — сцены пишет резерв.' : '') : ' Резервный режим.'
+    }`;
+  }
+}
+
+async function takeRest() {
+  if (!store.game || store.busy) return;
+  setComposerBusy(true);
+  try {
+    const res = await api(`/api/games/${store.game.id}/rest`, { method: 'POST', body: '{}' });
+    store.game = res.state;
+    updateSheet();
+    rerenderComposer();
+    toast('Передышка: силы частично вернулись, рывок восстановлен.');
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    setComposerBusy(false);
+  }
+}
+
 async function compactMemory() {
   if (!store.game || store.busy) return;
   toast('Архивариус перечитывает хронику...');
@@ -1181,6 +1259,17 @@ async function compactMemory() {
     store.game = res.state;
     updateSheet();
     toast(res.added ? `Память уплотнена: +${res.added} фактов` : 'Память уже уплотнена.');
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function forkStory(id) {
+  try {
+    const res = await api(`/api/games/${id}/fork`, { method: 'POST', body: '{}' });
+    hideOverlay();
+    toast('Ветка создана: герой возвращается с полпути.');
+    location.hash = `#/game/${res.state.id}`;
   } catch (err) {
     toast(err.message, true);
   }

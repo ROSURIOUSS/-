@@ -251,9 +251,19 @@ button { cursor: pointer; }
 
 .arch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .arch {
+  position: relative; overflow: hidden;
   border: 1px solid var(--line); border-radius: 3px; padding: 14px; background: rgba(0,0,0,0.22);
-  text-align: left; display: grid; gap: 8px; transition: all 0.2s ease;
+  text-align: left; display: grid; gap: 8px; transition: all 0.25s ease;
 }
+.arch__portrait {
+  display: block; height: 132px; margin: -14px -14px 6px; overflow: hidden; background: #0b0a0c;
+  mask-image: linear-gradient(180deg, #000 55%, transparent 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent 100%);
+}
+.arch__portrait img { width: 100%; height: 100%; object-fit: cover; object-position: center 22%; filter: grayscale(0.35) brightness(0.86); transition: transform 0.6s cubic-bezier(.2,.8,.2,1), filter 0.35s ease; }
+.arch:hover .arch__portrait img { transform: scale(1.06); filter: grayscale(0) brightness(0.98); }
+.arch.is-active .arch__portrait img { filter: grayscale(0) brightness(1.02); }
+.arch.is-active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
 .arch:hover { border-color: var(--line-strong); background: rgba(255,255,255,0.03); }
 .arch.is-active { border-color: var(--accent); background: var(--accent-soft); }
 .arch__name { font-family: var(--serif); font-size: 18px; }
@@ -278,7 +288,7 @@ button { cursor: pointer; }
 .preview-hero__name { font-family: var(--serif); font-size: 26px; margin: 4px 0 2px; }
 .preview-hero__role { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent); }
 .preview-hero__art {
-  height: 130px; margin: 16px -22px 16px; background-size: cover; background-position: center; opacity: 0.75;
+  height: 210px; margin: 16px -22px 16px; background-size: cover; background-position: center 22%; opacity: 0.85;
   mask-image: linear-gradient(180deg, rgba(0,0,0,0.9), transparent);
   -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,0.9), transparent);
 }
@@ -340,6 +350,24 @@ button { cursor: pointer; }
 .check-card.is-fail { border-color: rgba(180,72,60,0.45); }
 .check-card.is-fail .check-card__die { color: #d8867b; border-color: rgba(180,72,60,0.5); }
 .check-card__verdict { text-transform: uppercase; letter-spacing: 0.12em; font-size: 10.5px; }
+
+
+.sheet-avatar {
+  width: 46px; height: 46px; border-radius: 50%; object-fit: cover; object-position: center 20%;
+  border: 1px solid var(--line-strong); flex: 0 0 auto; filter: grayscale(0.2);
+}
+
+.btn--rest { gap: 6px; }
+.btn--rest b { font-family: var(--mono); font-size: 10px; color: var(--ink-dim); letter-spacing: 0.02em; }
+
+.btn--boost { gap: 6px; border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--ink-dim); }
+.btn--boost b { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; padding: 1px 5px; border: 1px solid var(--line-strong); border-radius: 2px; color: var(--accent); }
+.btn--boost.is-armed { border-color: var(--accent); color: #fff; background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 30%, transparent); }
+.btn--boost.is-spent { opacity: 0.45; }
+.check-card__boost {
+  font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 2px; padding: 1px 5px;
+}
 
 .narration { font-family: var(--serif); font-size: 18.5px; line-height: 1.72; color: #e4dccf; }
 .narration p { margin: 0 0 1em; }
@@ -516,9 +544,11 @@ button { cursor: pointer; }
   .builder__aside { position: static; }
   .choices { grid-template-columns: 1fr; }
   .choice { min-height: 0; }
-  .narration { font-size: 17px; }
+  
+.narration { font-size: 17px; }
   .transcript { padding-bottom: 260px; }
   .free-form .btn span { display: none; }
+  .free-form .btn--boost span { display: inline; }
 }
 @media (max-width: 560px) {
   .brand__sub { display: none; }
