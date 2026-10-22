@@ -161,7 +161,7 @@ function optionsKeyboard(state) {
   const rows = (last?.options || []).slice(0, 3).map((o, i) => [{ text: `${i + 1}. ${o}`.slice(0, 60), callback_data: `opt:${i}` }]);
   rows.push([
     { text: '👤 Герой', callback_data: 'hero' },
-    { text: '🛡 Аудит', callback_data: 'audit' },
+    { text: '⚡ Рывок', callback_data: 'boost' },
     { text: '📜 Хроника', callback_data: 'export' }
   ]);
   return rows;
@@ -264,6 +264,7 @@ async function createGame(chatId, worldId, archetypeId, userName) {
 
 async function makeTurn(chatId, action) {
   const s = session(chatId);
+  const boost = Boolean(s.boostArmed);
   const state = s.gameId ? await loadGame(s.gameId) : null;
   if (!state) return send(chatId, 'Истории пока нет. /new — начать.');
   if (state.status === 'dead') {
@@ -277,7 +278,8 @@ async function makeTurn(chatId, action) {
     if (sanitized.error) return send(chatId, 'Опиши действие словами.');
     if (sanitized.cheat) noteCheatAttempt(state, sanitized.text);
 
-    const result = await runTurn(state, sanitized.text);
+    const result = await runTurn(state, sanitized.text, () => {}, { boost });
+    if (boost) await setSession(chatId, { boostArmed: false });
     const text = renderScene(result.state, result.turn);
     if (result.demo && !DEMO_MODE) {
       await send(chatId, '🛠 <i>Модель не ответила — сцену написал резервный рассказчик.</i>');
@@ -375,12 +377,25 @@ export async function handleUpdate(update) {
       const [, worldId, archetypeId] = data.split(':');
       return createGame(chatId, worldId, archetypeId, cq.from?.first_name);
     }
-    if (data === 'hero' || data === 'audit' || data === 'export') {
+    if (data === 'hero' || data === 'audit' || data === 'export' || data === 'boost') {
       const s = session(chatId);
       const state = s.gameId ? await loadGame(s.gameId) : null;
       if (!state) return send(chatId, 'Истории пока нет. /new');
       if (data === 'hero') return send(chatId, heroText(state));
       if (data === 'audit') return runAudit(chatId);
+      if (data === 'boost') {
+        if (state.status === 'dead') return send(chatId, 'История закончена. /new');
+        const ready = state.hero.boosts > 0;
+        if (!ready) return send(chatId, '⚡ Рывок израсходован. Восстановится после передышки — на сайте это кнопка «Передышка».');
+        const nowArmed = !s.boostArmed;
+        await setSession(chatId, { boostArmed: nowArmed });
+        return send(
+          chatId,
+          nowArmed
+            ? '⚡ <b>Рывок заряжен</b>\nСледующее действие сервер бросит дважды и возьмёт лучший результат. Осталось: 1.'
+            : '⚡ Рывок снят. Следующее действие пройдёт с обычным броском.'
+        );
+      }
       return sendChronicle(chatId);
     }
     if (data.startsWith('opt:')) {
