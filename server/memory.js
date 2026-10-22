@@ -222,8 +222,13 @@ export function chronicle(state, limit = 10) {
   return (state.log || [])
     .slice(-limit)
     .map((entry) => {
-      const first = String(entry.narration || '').split(/(?<=[.!?])\s/)[0] || '';
-      return { turn: entry.turn, action: entry.action, headline: first.slice(0, 180) };
+      const paragraphs = String(entry.narration || '')
+        .split(/\n{2,}/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      // первый абзац обычно атмосфера, второй — что произошло на самом деле
+      const source = (paragraphs[1] || paragraphs[0] || '').split(/(?<=[.!?])\s/).slice(0, 2).join(' ');
+      return { turn: entry.turn, action: entry.action, headline: source.slice(0, 180) };
     });
 }
 

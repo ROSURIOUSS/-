@@ -599,6 +599,23 @@ function turnHTML(entry, isFirst) {
   </article>`;
 }
 
+function recapHTML(chronicle, s) {
+  if (!chronicle.length || (s.scene.turn || 1) < 4) return '';
+  const items = chronicle.slice(-5).reverse();
+  return `<details class="recap">
+    <summary><span class="recap__label">Ранее в истории</span><span class="recap__count">${items.length}</span></summary>
+    <div class="recap__list">
+      ${items
+        .map(
+          (c) => `<div class="recap__item"><span class="meta">ход ${c.turn}</span><b>${esc(clampText(c.action, 90))}</b>${
+            c.headline ? `<span class="recap__line">${esc(c.headline)}</span>` : ''
+          }</div>`
+        )
+        .join('')}
+    </div>
+  </details>`;
+}
+
 function headerHTML(s) {
   return `
     <div class="scene-title">
@@ -637,6 +654,7 @@ function renderPlay(data) {
 
     <div class="play-grid">
       <section class="transcript" id="transcript">
+        ${recapHTML(data.chronicle || [], s)}
         ${log.map((entry, i) => turnHTML(entry, i === 0)).join('')}
       </section>
 
