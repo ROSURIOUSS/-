@@ -11,6 +11,7 @@ const engine = await import('../server/engine.js');
 const { sanitizeAction, normalizePlan, commitPlan } = engine;
 const { migrate, exportMarkdown } = await import('../server/store.js');
 const { guessStat, actionDifficulty, resolveCheck, actionNeedsRoll } = await import('../server/dice.js');
+const { buildSystemPrompt } = await import('../server/prompts.js');
 const { parseModelJson } = await import('../server/ai.js');
 
 let passed = 0;
@@ -244,6 +245,34 @@ test('память находит нужные факты по смыслу', ()
   assert.ok(found.facts.some((f) => f.pinned), 'незыблемый факт не поднят');
   assert.ok(found.npcs === undefined || true);
   assert.ok(memoryIndexSize(g).facts >= 2);
+});
+
+test('память хранит короткие итоги ходов и отдаёт их мастеру', () => {
+  const g = createGame({ worldId: 'tide', hero: { archetypeId: 'medic' } });
+  for (let i = 1; i <= 4; i++) {
+    rememberTurn(g, {
+      turn: i,
+      action: `Действие ${i}`,
+      narration: `Сцена ${i}. Первое предложение держит нить. Второе добавляет деталь. Третье закрывает картину.`,
+      facts: [],
+      npcs: []
+    });
+  }
+  assert.equal(g.memory.beats.length, 4);
+  assert.equal(g.memory.beats[3].beat, 'Сцена 4.');
+  const prompt = buildSystemPrompt(g, retrieve(g, 'Действие 4'));
+  assert.ok(prompt.includes('ЧТО БЫЛО НЕДАВНО'), 'в промпте нет блока недавних ходов');
+  assert.ok(prompt.includes('Сцена 2.'), 'недавний ход не попал в промпт');
+  assert.ok(!prompt.includes('Сцена 4. Первое'), 'текущий ход продублирован в недавних');
+});
+
+test('итоги ходов не растут бесконечно', () => {
+  const g = createGame({ worldId: 'rail', hero: { archetypeId: 'engineer' } });
+  for (let i = 1; i <= 70; i++) {
+    rememberTurn(g, { turn: i, action: `Шаг ${i}`, narration: `Ты делаешь шаг номер ${i} и слушаешь тишину вагона. Ещё одна фраза для длины.`, facts: [] });
+  }
+  assert.equal(g.memory.beats.length, 60);
+  assert.equal(g.memory.beats[59].turn, 70);
 });
 
 test('незыблемые факты не вымываются при переполнении памяти', () => {
