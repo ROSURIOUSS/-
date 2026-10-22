@@ -14,6 +14,7 @@
     "bot": "node server/telegram.js",
     "test": "node scripts/selftest.js",
     "e2e": "node scripts/integration.js",
-    "check": "npm test && npm run e2e"
+    "check": "npm test && npm run bot:test && npm run e2e",
+    "bot:test": "node scripts/bot-test.js"
   }
 }

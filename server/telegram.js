@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { TELEGRAM_TOKEN, HOSTED_URL } from './config.js';
+import { TELEGRAM_TOKEN, HOSTED_URL, BOT_COOLDOWN_MS } from './config.js';
 
 const OPENROUTER_BASE = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
 import { PRESETS, ARCHETYPES, DIFFICULTIES } from './worlds.js';
@@ -528,7 +528,7 @@ export async function handleUpdate(update) {
     if (msg.chat.type !== 'private') return send(chatId, 'Лория ведёт историю один на один.');
     const now = Date.now();
     const lastAt = cooldown.get(chatId) || 0;
-    if (now - lastAt < 1500) return;
+    if (now - lastAt < BOT_COOLDOWN_MS) return;
     cooldown.set(chatId, now);
     return handleVoice(chatId, msg);
   }
@@ -567,7 +567,7 @@ export async function handleUpdate(update) {
 
   const now = Date.now();
   const lastAt = cooldown.get(chatId) || 0;
-  if (now - lastAt < 1500) return send(chatId, 'Не так быстро. Мастер ещё не договорил.');
+  if (now - lastAt < BOT_COOLDOWN_MS) return send(chatId, 'Не так быстро. Мастер ещё не договорил.');
   cooldown.set(chatId, now);
 
   return makeTurn(chatId, text);

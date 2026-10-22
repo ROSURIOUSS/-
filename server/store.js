@@ -33,6 +33,9 @@ export function migrate(state) {
   const hero = state.hero;
   if (!Number.isFinite(hero.boosts)) hero.boosts = 1;
   if (!Number.isFinite(hero.maxBoosts)) hero.maxBoosts = 1;
+  if (!Number.isFinite(hero.level)) hero.level = 1;
+  if (!Number.isFinite(hero.xp)) hero.xp = 0;
+  if (typeof hero.pendingLevel !== 'boolean') hero.pendingLevel = false;
   if (!Array.isArray(hero.conditions)) hero.conditions = [];
   if (!Array.isArray(hero.items)) hero.items = [];
   if (!hero.portrait) {

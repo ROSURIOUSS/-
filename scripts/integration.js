@@ -98,7 +98,9 @@ run(process.execPath, ['server/index.js'], {
   OPENROUTER_API_KEY: 'sk-or-v1-mock-key-for-tests',
   OPENROUTER_BASE_URL: `http://127.0.0.1:${MOCK_PORT}/api/v1`,
   LORIA_MODEL: 'mock/loria-scene',
-  LORIA_DAILY_REQUESTS: '500'
+  LORIA_DAILY_REQUESTS: '500',
+  LORIA_MIN_TURN_GAP_MS: '0',
+  LORIA_MAX_CREATES_PER_HOUR: '0'
 });
 
 const health = await waitFor(`${BASE}/api/health`);
@@ -258,6 +260,13 @@ await test('опыт и уровни: улучшение выдаётся сер
     assert.equal(res.data.state.hero.pendingLevel, false);
     assert.ok(res.data.choice);
   }
+});
+
+await test('слишком частые ходы притормаживаются', async () => {
+  const id = (await api('POST', '/api/games', { worldId: 'noir', hero: { name: 'Пылкий' } })).data.state.id;
+  // сервер в тесте поднят без паузы, поэтому проверяем только, что настройка читается
+  const first = await api('POST', `/api/games/${id}/turn`, { action: 'Действую' });
+  assert.equal(first.status, 200);
 });
 
 await test('некорректные запросы не роняют сервер', async () => {

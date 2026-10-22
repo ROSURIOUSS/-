@@ -42,6 +42,8 @@ const SECURITY_HEADERS = {
 };
 
 const locks = new Set();
+const lastTurnAt = new Map();
+const MIN_TURN_GAP_MS = Number(process.env.LORIA_MIN_TURN_GAP_MS ?? 700);
 const startedAt = Date.now();
 const createdByIp = new Map();
 
@@ -249,6 +251,11 @@ async function handleApi(req, res, url) {
     if (sanitized.cheat) noteCheatAttempt(state, action);
 
     if (locks.has(id)) return json(res, 429, { error: 'Мастер ещё отвечает на предыдущий ход.' });
+    const gap = Date.now() - (lastTurnAt.get(id) || 0);
+    if (gap < MIN_TURN_GAP_MS) {
+      return json(res, 429, { error: 'Слишком часто: мастер не успевает выдохнуть.' });
+    }
+    lastTurnAt.set(id, Date.now());
     locks.add(id);
 
     try {

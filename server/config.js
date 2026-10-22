@@ -21,5 +21,8 @@ export const ENABLE_AI_AUDIT = process.env.LORIA_AI_AUDIT === '1';
 export const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 export const TELEGRAM_ENABLED = Boolean(TELEGRAM_TOKEN);
 export const ADMIN_CHAT_ID = process.env.LORIA_ADMIN_CHAT_ID || '';
+// Пауза между сообщениями бота (мс). Ноль отключает — удобно для тестов.
+export const BOT_COOLDOWN_MS = Number(process.env.LORIA_BOT_COOLDOWN_MS ?? 1500);
+
 // Публичная регистрация: если ноль — создавать истории может кто угодно (локальный режим).
 export const MAX_CREATES_PER_HOUR = Number(process.env.LORIA_MAX_CREATES_PER_HOUR || 40);
