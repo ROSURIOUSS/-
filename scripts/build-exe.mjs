@@ -137,10 +137,16 @@ async function resolveNodeBinary(platform) {
     log(`  база: ${explicit}`);
     return path.resolve(explicit);
   }
+  if (platform === 'win' && process.platform === 'win32') {
+    return process.execPath;
+  }
   if (platform === 'linux' && process.platform === 'linux') {
     return process.execPath;
   }
-  return downloadNode(builderVersion, platform === 'win' ? 'win-x64' : 'linux-x64');
+  if (platform === 'linux') {
+    throw new Error('Linux-сборку делай на Linux или укажи --node-bin путь/к/node');
+  }
+  return downloadNode(builderVersion, 'win-x64');
 }
 
 // ---------- иконка и свойства файла ----------
