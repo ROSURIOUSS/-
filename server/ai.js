@@ -57,6 +57,103 @@ export function aiAvailable() {
   return Boolean(key && key.startsWith('sk-or-'));
 }
 
+/** Короткая сводка о ключе — для панели «Мастер» и диагностики. */
+export function aiKeyInfo() {
+  const { key, primary } = aiConfig();
+  return {
+    present: Boolean(key),
+    valid: Boolean(key && key.startsWith('sk-or-')),
+    masked: key ? `${key.slice(0, 10)}…${key.slice(-4)}` : '',
+    model: primary
+  };
+}
+
+function netMessage(status, detail) {
+  if (status === 401) return 'OpenRouter отклонил ключ (401). Проверь ключ или создай новый.';
+  if (status === 402) return 'На ключе нет кредитов (402). Бесплатные модели могут работать — проверь их ниже.';
+  if (status === 403) return 'Провайдер закрыл доступ (403). Проверь настройки приватности и бесплатные модели на openrouter.ai.';
+  if (status === 404) return 'Модель не найдена (404). Выбери другую в LORIA_MODEL.';
+  if (status === 429) return 'Слишком много запросов (429). Подожди минуту.';
+  if (status >= 500) return `OpenRouter ответил ошибкой ${status}. Попробуй позже.`;
+  return detail || `Ошибка ${status}`;
+}
+
+/** Один пробный запрос к модели: нужен кнопке «Проверить связь». */
+export async function pingModel(model, { timeoutMs = 18000 } = {}) {
+  const { key } = aiConfig();
+  const started = Date.now();
+  if (!key) return { model, ok: false, status: 0, ms: 0, reason: 'Ключ OpenRouter не задан' };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${baseUrl()}/chat/completions`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': process.env.LORIA_SITE_URL || 'https://loria.local',
+        'X-Title': 'Loria'
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Ответь одним словом: работает' }],
+        max_tokens: 16
+      })
+    });
+    const raw = await res.text();
+    const ms = Date.now() - started;
+    if (res.ok) return { model, ok: true, status: res.status, ms, reason: 'Модель ответила' };
+    let detail = raw.slice(0, 300);
+    try {
+      detail = JSON.parse(raw)?.error?.message || detail;
+    } catch {
+      /* оставляем текст как есть */
+    }
+    return { model, ok: false, status: res.status, ms, reason: netMessage(res.status, detail), detail };
+  } catch (err) {
+    const ms = Date.now() - started;
+    const timeout = err?.name === 'AbortError';
+    return {
+      model,
+      ok: false,
+      status: timeout ? 408 : 0,
+      ms,
+      reason: timeout ? `Модель не ответила за ${Math.round(timeoutMs / 1000)} с` : 'Нет связи с OpenRouter: проверь интернет или VPN.',
+      detail: err?.message
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Живая проверка: основная модель, при отказе — бесплатная.
+ * Не трогает сохранения и лимиты игр.
+ */
+export async function aiDoctorCheck({ timeoutMs = 18000 } = {}) {
+  const info = aiKeyInfo();
+  if (!info.present) {
+    return { ok: false, ...info, checkedAt: Date.now(), results: [], reason: 'Ключ OpenRouter не задан' };
+  }
+  const { models } = aiConfig();
+  const primary = models[0];
+  const results = [await pingModel(primary, { timeoutMs })];
+  const needsFallback = !results[0].ok && [402, 403, 404].includes(results[0].status);
+  if (needsFallback) {
+    const free = FREE_FALLBACKS.find((m) => m !== primary);
+    if (free) results.push(await pingModel(free, { timeoutMs }));
+  }
+  const ok = results.some((r) => r.ok);
+  return {
+    ok,
+    ...info,
+    checkedAt: Date.now(),
+    results,
+    reason: ok ? 'Мастер на связи' : results[0]?.reason || 'Модель не ответила'
+  };
+}
+
 function tryParseJson(text) {
   if (!text) return null;
   let cleaned = String(text).trim();
@@ -207,6 +304,20 @@ async function catalog() {
   }
 }
 
+/** Бесплатные модели, которые сейчас реально есть в каталоге OpenRouter. */
+async function freeFromCatalog() {
+  const ids = await catalog();
+  const free = ids.filter((id) => id.endsWith(':free'));
+  const preferred = ['deepseek', 'qwen', 'llama', 'gemini', 'mistral'];
+  return free.sort((a, b) => {
+    const rank = (id) => {
+      const i = preferred.findIndex((p) => id.includes(p));
+      return i === -1 ? preferred.length : i;
+    };
+    return rank(a) - rank(b);
+  });
+}
+
 /** Список моделей: сначала настроенная, затем доступные из каталога, затем статические запасные. */
 export async function modelPlan() {
   const { models } = aiConfig();
@@ -224,8 +335,17 @@ export async function modelPlan() {
  * Запрос к модели с перебором моделей.
  * Пытается: основная модель, затем запасные; между попытками — пауза.
  */
-export async function askJson({ system, user, temperature = 0.95, maxTokens = 1200, timeoutMs = 75000 }) {
+export async function askJson({
+  system,
+  user,
+  temperature = 0.95,
+  maxTokens = 1200,
+  timeoutMs = 75000,
+  budgetMs = 70000
+}) {
   if (!aiAvailable()) throw new AIError('ИИ недоступен: ключ не задан', { status: 0 });
+  // Общий бюджет: игрок не должен ждать десять минут, пока перебираются модели.
+  const deadline = Date.now() + budgetMs;
   const planned = await modelPlan();
   const queue = planned.slice(0, 4);
   const attempted = [];
@@ -238,8 +358,10 @@ export async function askJson({ system, user, temperature = 0.95, maxTokens = 12
     let jsonMode = true;
 
     for (let attempt = 0; attempt < 2; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining < 2500) break;
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const timer = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
       try {
         const result = await callModel({
           model,
@@ -258,7 +380,7 @@ export async function askJson({ system, user, temperature = 0.95, maxTokens = 12
       } catch (err) {
         const error =
           err?.name === 'AbortError'
-            ? new AIError(`Модель ${model} не ответила за ${Math.round(timeoutMs / 1000)} с`, { status: 408, retryable: true })
+            ? new AIError('Модель не ответила вовремя', { status: 408, retryable: true })
             : err instanceof TypeError
               ? new AIError('Нет связи с OpenRouter: проверь интернет или VPN.', { status: 0, retryable: true, detail: err.message })
               : err;
@@ -271,9 +393,11 @@ export async function askJson({ system, user, temperature = 0.95, maxTokens = 12
         // на нулевом балансе ещё можно сыграть на бесплатных моделях
         if (error.status === 402 && !triedFree) {
           triedFree = true;
-          const free = FREE_FALLBACKS.filter((m) => !queue.includes(m));
+          // Сначала пробуем бесплатные из живого каталога, потом статический список.
+          const live = (await freeFromCatalog()).filter((m) => !queue.includes(m)).slice(0, 3);
+          const free = [...live, ...FREE_FALLBACKS.filter((m) => !queue.includes(m) && !live.includes(m))];
           queue.splice(index + 1, 0, ...free);
-          if (queue.length > 6) queue.length = 6;
+          if (queue.length > 8) queue.length = 8;
           break;
         }
         if (error.status === 402) throw withAttempts(error, attempted);

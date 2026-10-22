@@ -7,8 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { loadEnv } from './env.js';
 loadEnv();
 
-import { aiAvailable, aiConfig, aiStatus } from './ai.js';
-import { sanitizeAction, noteCheatAttempt, runTurn, startNewGame, forkGame, compactStateMemory, engineStats, DEMO_MODE, rest, rewind, levelUp } from './engine.js';
+import { aiAvailable, aiConfig, aiStatus, aiKeyInfo, aiDoctorCheck } from './ai.js';
+import { sanitizeAction, noteCheatAttempt, runTurn, startNewGame, forkGame, compactStateMemory, engineStats, isDemo, rest, rewind, levelUp } from './engine.js';
+import { applySettings, saveSettings, readSettings, maskedKey } from './settings.js';
 import { publicState, levelChoices } from './state.js';
 import { PRESETS, ARCHETYPES, TRAITS, BURDENS, DIFFICULTIES } from './worlds.js';
 import { saveGame, loadGame, listGames, deleteGame, exportMarkdown, prune, importGame } from './store.js';
@@ -18,6 +19,9 @@ import { DAILY_LIMIT, PORT, HOST, MAX_CREATES_PER_HOUR } from './config.js';
 
 // В обычном запуске — папка public рядом с server/. В собранном .exe (SEA)
 // путь приходит из LORIA_PUBLIC_DIR: лаунчер распаковывает встроенные файлы.
+// Ключ, сохранённый в приложении, важнее .env — игрок мог ввести его в панели «Мастер».
+applySettings();
+
 const HERE = typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = process.env.LORIA_PUBLIC_DIR
   ? path.resolve(process.env.LORIA_PUBLIC_DIR)
@@ -118,15 +122,41 @@ async function handleApi(req, res, url) {
     const { primary } = aiConfig();
     return json(res, 200, {
       ok: true,
-      ai: aiAvailable() && !DEMO_MODE,
+      ai: aiAvailable() && !isDemo(),
       keyPresent: aiAvailable(),
-      demo: DEMO_MODE,
+      demo: isDemo(),
       model: primary,
       lastFailure: aiStatus().lastFailure,
       uptime: Math.round((Date.now() - startedAt) / 1000),
       turns: engineStats().turnsServed,
       worlds: PRESETS.length
     });
+  }
+
+  // Панель «Мастер»: что с ключом и моделью. POST — живая проверка.
+  if (url.pathname === '/api/doctor' && (req.method === 'GET' || req.method === 'POST')) {
+    const config = { ...aiKeyInfo(), demo: isDemo(), lastFailure: aiStatus().lastFailure, savedWithApp: Boolean(readSettings().apiKey) };
+    if (req.method === 'GET') return json(res, 200, { ok: config.valid && !config.demo, ...config });
+    const report = await aiDoctorCheck({ timeoutMs: 18000 });
+    return json(res, 200, { ...config, ...report });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/settings') {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (err) {
+      return json(res, 413, { error: err.message });
+    }
+    const key = String(body?.apiKey || '').trim();
+    if (!/^sk-or-[A-Za-z0-9_-]{8,}$/.test(key)) {
+      return json(res, 400, { error: 'Ключ OpenRouter должен начинаться с sk-or- и быть без пробелов.' });
+    }
+    saveSettings({ apiKey: key });
+    process.env.OPENROUTER_API_KEY = key;
+    const report = await aiDoctorCheck({ timeoutMs: 18000 });
+    console.log(`[settings] ключ обновлён (…${key.slice(-4)}), проверка: ${report.ok ? 'ок' : report.reason}`);
+    return json(res, 200, { ok: true, saved: true, keyMasked: maskedKey(key), ...report });
   }
 
   // Фокус уже открытого окна: лаунчер подменяет обработчик на живое окно.
@@ -164,8 +194,8 @@ async function handleApi(req, res, url) {
       burdens: BURDENS,
       difficulties: Object.values(DIFFICULTIES),
       ai: {
-        available: aiAvailable() && !DEMO_MODE,
-        demo: DEMO_MODE,
+        available: aiAvailable() && !isDemo(),
+        demo: isDemo(),
         dailyLimit: DAILY_LIMIT,
         lastFailure: aiStatus().lastFailure
       }
@@ -187,13 +217,13 @@ async function handleApi(req, res, url) {
       return json(res, 429, { error: 'Слишком много новых историй за час. Дай миру передохнуть.' });
     }
     try {
-      const { state, demo } = await startNewGame({
+      const { state, demo, aiError } = await startNewGame({
         worldId: body.worldId,
         customWorld: body.customWorld,
         hero: body.hero || {},
         difficulty: body.difficulty
       });
-      return json(res, 200, { state: publicState(state), demo });
+      return json(res, 200, { state: publicState(state), demo, aiError });
     } catch (err) {
       console.error('[create]', err);
       return json(res, 500, { error: 'Мир не открылся. Попробуй ещё раз.' });
@@ -402,7 +432,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && tail === 'audit') {
     const last = (state.log || []).slice(-1)[0];
     if (!last) return json(res, 400, { error: 'Пока нечего проверять' });
-    if (DEMO_MODE || !aiAvailable()) {
+    if (isDemo() || !aiAvailable()) {
       return json(res, 200, {
         state: publicState(state),
         note: 'Аудитор работает локально: серьёзных нарушений не найдено.'
@@ -502,7 +532,7 @@ server.listen(PORT, HOST, () => {
   console.log('');
   console.log('  ЛОРИЯ — веб-RPG с суверенным мастером');
   console.log(`  http://localhost:${PORT}`);
-  console.log(`  ИИ: ${DEMO_MODE ? 'резервный режим (без модели)' : aiAvailable() ? `да, ${primary}` : 'нет ключа — резервный режим'}`);
+  console.log(`  ИИ: ${isDemo() ? 'резервный режим (без модели)' : aiAvailable() ? `да, ${primary}` : 'нет ключа — резервный режим'}`);
   console.log('');
   prune();
 });

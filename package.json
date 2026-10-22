@@ -1,6 +1,6 @@
 {
   "name": "loria-web",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "description": "Лория — хардкорная ИИ-RPG с суверенным Гейм-Мастером, аудитором состояния и памятью мира",
   "type": "module",
   "private": true,

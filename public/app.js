@@ -180,7 +180,7 @@ function renderHome() {
       </div>
       <div class="topbar__meta">
         <span class="chip">${store.content.worlds.length} мира</span>
-        <span class="chip ${aiState().tone}"><span class="dot"></span>${aiState().label}</span>
+        <button class="chip ${aiState().tone}" data-act="ai-panel" title="Проверить мастера" style="background:none;border:1px solid var(--line);cursor:pointer"><span class="dot"></span>${aiState().label}</button>
         <button class="btn btn--ghost btn--small" data-act="nav" data-to="/rules">Правила</button>
         <button class="btn btn--ghost btn--small" data-act="nav" data-to="/archive">Архив</button>
       </div>
@@ -545,7 +545,12 @@ async function createGame() {
     store.earlier = [];
     store.earlierFrom = res.state.logFrom ?? 0;
     localStorage.setItem('loria:last', res.state.id);
-    if (res.demo) toast('Модель не ответила — начал резервный рассказчик. Игра продолжится.');
+    if (res.demo) {
+      toast(
+        res.aiError ? `Мастер не ответил: ${clampText(res.aiError, 90)}` : 'Модель не ответила — начал резервный рассказчик.',
+        true
+      );
+    }
     location.hash = `#/game/${res.state.id}`;
   } catch (err) {
     hideOverlay();
@@ -648,6 +653,7 @@ function headerHTML(s) {
     </div>
     <div class="scene-head__actions">
       <button class="btn btn--ghost btn--small sheet-toggle" data-act="toggle-sheet" aria-label="Открыть лист героя">Лист героя</button>
+      <button class="btn btn--ghost btn--small" data-act="ai-panel" aria-label="Мастер и модель">Мастер</button>
       <button class="btn btn--ghost btn--small" data-act="rules" aria-label="Правила мира">Правила</button>
       <a class="btn btn--ghost btn--small" href="/api/games/${esc(s.id)}/export">Хроника</a>
       <button class="btn btn--ghost btn--small" data-act="nav" data-to="/">Выход</button>
@@ -1092,7 +1098,12 @@ function finishTurn(payload) {
   syncActionButtons();
   updateSheet();
   renderChoices(payload.state);
-  if (payload.demo) toast('Модель не ответила — сцену дописал резервный рассказчик.');
+  if (payload.demo) {
+    toast(
+      payload.aiError ? `Мастер не ответил: ${clampText(payload.aiError, 90)}` : 'Модель не ответила — сцену дописал резервный рассказчик.',
+      true
+    );
+  }
   if (payload.turn?.leveled) setTimeout(() => showLevelUp(), 1100);
   if (payload.state.status === 'dead') {
     const input = document.getElementById('free-action');
@@ -1164,6 +1175,104 @@ function showThinkingOverlay(title, text) {
 
 function hideOverlay() {
   overlayRoot.innerHTML = '';
+}
+
+// ---------- панель «Мастер» ----------
+
+function aiRowsHTML(d) {
+  const rows = [
+    ['Ключ', d.present ? `${d.masked || ''}${d.valid ? '' : ' — не sk-or-'}` : 'не задан'],
+    ['Источник', d.savedWithApp ? 'введён в приложении' : d.present ? '.env или переменные окружения' : '—'],
+    ['Модель', d.model || '—'],
+    ['Режим', d.demo ? 'резервный рассказчик' : d.valid ? 'мастер подключён' : 'без модели'],
+    ['Последний сбой', d.lastFailure ? clampText(d.lastFailure.message, 140) : '—']
+  ];
+  return `<div class="ai-rows">${rows
+    .map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`)
+    .join('')}</div>`;
+}
+
+function aiResultsHTML(results) {
+  if (!results?.length) return '';
+  return results
+    .map(
+      (r) => `<div class="ai-check ${r.ok ? 'is-ok' : 'is-bad'}">
+        <b>${r.ok ? '✓' : '✗'} ${esc(r.model)}</b>
+        <span>${r.status ? `HTTP ${r.status} · ` : ''}${esc(r.reason)}${r.ms ? ` · ${r.ms} мс` : ''}</span>
+      </div>`
+    )
+    .join('');
+}
+
+async function refreshAIPanel() {
+  const body = document.getElementById('ai-panel-body');
+  if (!body) return;
+  try {
+    body.innerHTML = aiRowsHTML(await api('/api/doctor'));
+  } catch (err) {
+    body.innerHTML = `<p class="mem-empty">Сервер не ответил: ${esc(err.message)}</p>`;
+  }
+}
+
+function showAIPanel() {
+  overlayRoot.innerHTML = `<div class="overlay" data-act="close-overlay">
+    <div class="overlay__card" data-stop="1">
+      <div class="eyebrow">Мастер</div>
+      <h2>Модель</h2>
+      <div id="ai-panel-body"><p class="mem-empty">Смотрю настройки…</p></div>
+      <label class="eyebrow" for="ai-key" style="display:block;margin-top:18px">Ключ OpenRouter</label>
+      <input id="ai-key" class="input" type="password" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false" />
+      <div class="composer__hint" style="text-align:left;margin-top:6px">
+        Ключ остаётся на этом компьютере (data/settings.json) и главнее .env.
+        Новый ключ: openrouter.ai/keys
+      </div>
+      <div class="overlay__actions">
+        <button class="btn btn--primary" data-act="ai-save">Сохранить и проверить</button>
+        <button class="btn" data-act="ai-check">Проверить связь</button>
+        <button class="btn btn--ghost" data-act="close-overlay">Закрыть</button>
+      </div>
+      <div id="ai-panel-log" class="ai-panel__log"></div>
+    </div>
+  </div>`;
+  refreshAIPanel();
+}
+
+async function testAI() {
+  const log = document.getElementById('ai-panel-log');
+  if (log) log.innerHTML = '<p class="mem-empty">Стучусь в OpenRouter… до 20 секунд.</p>';
+  try {
+    const data = await api('/api/doctor', { method: 'POST' });
+    if (log) log.innerHTML = aiResultsHTML(data.results) || `<p class="mem-empty">${esc(data.reason || 'Нет ответа')}</p>`;
+    toast(data.ok ? 'Мастер на связи' : `Модель не ответила: ${clampText(data.reason || '', 70)}`, !data.ok);
+    await refreshAIPanel();
+  } catch (err) {
+    if (log) log.innerHTML = `<p class="mem-empty">Не удалось проверить: ${esc(err.message)}</p>`;
+  }
+}
+
+async function saveAIKey() {
+  const input = document.getElementById('ai-key');
+  const key = (input?.value || '').trim();
+  if (!key) return toast('Вставь ключ OpenRouter', true);
+  const log = document.getElementById('ai-panel-log');
+  if (log) log.innerHTML = '<p class="mem-empty">Сохраняю и проверяю…</p>';
+  try {
+    const data = await api('/api/settings', { method: 'POST', body: JSON.stringify({ apiKey: key }) });
+    if (input) input.value = '';
+    if (log) log.innerHTML = aiResultsHTML(data.results);
+    toast(data.ok ? 'Ключ сохранён, мастер на связи' : 'Ключ сохранён, но модель пока не ответила', !data.ok);
+    try {
+      if (store.content) store.content.ai = (await api('/api/content')).ai;
+    } catch {
+      /* не критично */
+    }
+    const head = document.querySelector('.scene-head__inner');
+    if (head && store.game) head.innerHTML = headerHTML(store.game);
+    await refreshAIPanel();
+  } catch (err) {
+    if (log) log.innerHTML = `<p class="mem-empty">${esc(err.message)}</p>`;
+    toast(err.message, true);
+  }
 }
 
 function showRules() {
@@ -1484,6 +1593,18 @@ app.addEventListener('click', async (e) => {
     hideOverlay();
     return;
   }
+  if (act === 'ai-panel') {
+    showAIPanel();
+    return;
+  }
+  if (act === 'ai-check') {
+    await testAI();
+    return;
+  }
+  if (act === 'ai-save') {
+    await saveAIKey();
+    return;
+  }
   if (act === 'fork') {
     await forkStory(el.dataset.id);
     return;
@@ -1502,15 +1623,25 @@ app.addEventListener('click', async (e) => {
 
 overlayRoot.addEventListener('click', async (e) => {
   const action = e.target.closest('[data-act]');
-  if (action?.dataset.act === 'level-choice') {
+  const act = action?.dataset.act;
+  if (act === 'level-choice') {
     await pickLevel(action.dataset.id);
     return;
   }
-  if (action?.dataset.act === 'fork') {
+  if (act === 'fork') {
     await forkStory(action.dataset.id);
     return;
   }
-  if (action?.dataset.act === 'close-overlay') {
+  if (act === 'ai-check') {
+    await testAI();
+    return;
+  }
+  if (act === 'ai-save') {
+    await saveAIKey();
+    return;
+  }
+  // Клик по затемнению закрывает окно, клик по самой карточке — нет.
+  if (act === 'close-overlay' && !e.target.closest('[data-stop]')) {
     hideOverlay();
     return;
   }

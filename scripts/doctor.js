@@ -2,7 +2,10 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import { loadEnv } from '../server/env.js';
+import { applySettings, settingsFile } from '../server/settings.js';
 loadEnv();
+// Ключ, введённый в приложении, главнее .env.
+const saved = applySettings();
 
 const OK = '\x1b[32m✓\x1b[0m';
 const NO = '\x1b[31m✗\x1b[0m';
@@ -14,12 +17,14 @@ const model = process.env.LORIA_MODEL || 'google/gemini-2.5-flash';
 console.log('\n  ЛОРИЯ · диагностика\n');
 
 console.log(`  ${fs.existsSync('.env') ? OK : WARN} файл .env ${fs.existsSync('.env') ? 'найден' : 'не найден (читаются только переменные окружения)'}`);
+if (saved?.apiKey) console.log(`  ${OK} ключ сохранён в приложении: ${settingsFile()}`);
 console.log(`  ${key.startsWith('sk-or-') ? OK : NO} ключ OpenRouter ${key ? `(…${key.slice(-6)})` : 'не задан'}`);
 console.log(`  ${fs.existsSync('public/index.html') ? OK : NO} статика public/`);
 console.log(`  ${fs.existsSync('data') ? OK : WARN} папка data/ ${fs.existsSync('data') ? '' : '(создастся при первом сохранении)'}`);
 
 if (!key.startsWith('sk-or-')) {
-  console.log(`\n  ${WARN} Без ключа приложение запустится в резервном режиме. Играть можно, но сцены будет писать шаблонный рассказчик.\n`);
+  console.log(`\n  ${WARN} Без ключа приложение запустится в резервном режиме. Играть можно, но сцены будет писать шаблонный рассказчик.`);
+  console.log('     Ключ можно вставить прямо в игре: кнопка «Мастер» в шапке → поле ключа → «Сохранить и проверить».\n');
 }
 
 async function checkModels() {
@@ -55,8 +60,8 @@ async function checkModels() {
     }
   } catch (err) {
     console.log(`  ${NO} сеть недоступна: ${err.message}`);
-    console.log('     Из этой песочницы запросы к openrouter.ai не проходят — это ограничение окружения,');
-    console.log('     а не приложения. На машине с интернетом проверь игру: npm run doctor && npm start');
+    console.log('     Проверь интернет, VPN или прокси (OPENROUTER_BASE_URL). Если openrouter.ai');
+    console.log('     открывается в браузере, а игра нет — пришли этот текст разработчику.');
   }
 }
 

@@ -85,6 +85,7 @@ process.on('SIGINT', () => {
 // чистим следы прошлых прогонов
 await fs.rm(path.resolve('data/games'), { recursive: true, force: true }).catch(() => {});
 await fs.mkdir(path.resolve('data/games'), { recursive: true });
+await fs.rm(path.resolve('data/settings.json'), { force: true }).catch(() => {});
 
 console.log('\n  ЛОРИЯ · сквозной тест с мок-моделью\n');
 
@@ -289,6 +290,40 @@ await test('слишком частые ходы притормаживаютс�
   assert.equal(first.status, 200);
 });
 
+await test('панель «Мастер» видит ключ и модель', async () => {
+  const res = await api('GET', '/api/doctor');
+  assert.equal(res.status, 200);
+  assert.equal(res.data.present, true, 'ключ не виден');
+  assert.equal(res.data.valid, true);
+  assert.ok(res.data.model, 'модель не названа');
+  assert.ok(!res.data.masked.includes('mock-key'), 'ключ отдаётся целиком');
+});
+
+await test('проверка связи стучится в модель', async () => {
+  const res = await api('POST', '/api/doctor', {});
+  assert.equal(res.status, 200);
+  assert.equal(res.data.ok, true, res.data.reason);
+  assert.ok(res.data.results.some((r) => r.ok), 'ни одна модель не ответила');
+});
+
+await test('ключ можно ввести в приложении, и режим меняется на живой', async () => {
+  const bad = await api('POST', '/api/settings', { apiKey: 'not-a-key' });
+  assert.equal(bad.status, 400);
+
+  const saved = await api('POST', '/api/settings', { apiKey: 'sk-or-v1-e2e-saved-key' });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.data.saved, true);
+  assert.equal(saved.data.ok, true, saved.data.reason);
+
+  const doctor = await api('GET', '/api/doctor');
+  assert.equal(doctor.data.savedWithApp, true, 'ключ не запомнился');
+  assert.equal(doctor.data.demo, false);
+
+  const health = await api('GET', '/api/health');
+  assert.equal(health.data.demo, false);
+  assert.equal(health.data.ai, true);
+});
+
 await test('некорректные запросы не роняют сервер', async () => {
   const bad = await fetch(`${BASE}/api/games/${gameId}/turn`, {
     method: 'POST',
@@ -318,6 +353,8 @@ await test('мёртвому герою нельзя продолжать', asyn
 
 cleanup();
 await fs.rm(path.resolve('data/games'), { recursive: true, force: true }).catch(() => {});
+// Ключ из теста не должен остаться в рабочей папке.
+await fs.rm(path.resolve('data/settings.json'), { force: true }).catch(() => {});
 
 console.log(`\n  Итог: ${passed} прошло, ${failed} провалилось\n`);
 process.exit(failed ? 1 : 0);

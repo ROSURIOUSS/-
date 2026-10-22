@@ -8,10 +8,14 @@ import { TELEGRAM_TOKEN, HOSTED_URL, BOT_COOLDOWN_MS } from './config.js';
 const OPENROUTER_BASE = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
 import { PRESETS, ARCHETYPES, DIFFICULTIES } from './worlds.js';
 import { loadGame, exportMarkdown } from './store.js';
-import { startNewGame, runTurn, sanitizeAction, noteCheatAttempt, DEMO_MODE } from './engine.js';
+import { startNewGame, runTurn, sanitizeAction, noteCheatAttempt, isDemo } from './engine.js';
+import { applySettings } from './settings.js';
 import { publicState } from './state.js';
 import { aiAudit } from './auditor.js';
 import { aiAvailable } from './ai.js';
+
+// Ключ, сохранённый в приложении, главнее .env.
+applySettings();
 
 const API = () => `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 const SESSIONS_FILE = path.join(path.resolve(process.env.LORIA_DATA_DIR || 'data'), 'telegram.json');
@@ -355,7 +359,7 @@ async function makeTurn(chatId, action) {
     const result = await runTurn(state, sanitized.text, () => {}, { boost });
     if (boost) await setSession(chatId, { boostArmed: false });
     const text = renderScene(result.state, result.turn);
-    if (result.demo && !DEMO_MODE) {
+    if (result.demo && !isDemo()) {
       await send(chatId, '🛠 <i>Модель не ответила — сцену написал резервный рассказчик.</i>');
     }
     if (text.length > 4096) {
@@ -397,7 +401,7 @@ async function runAudit(chatId) {
   const s = session(chatId);
   const state = s.gameId ? await loadGame(s.gameId) : null;
   if (!state) return send(chatId, 'Пока нечего проверять.');
-  if (DEMO_MODE || !aiAvailable()) {
+  if (isDemo() || !aiAvailable()) {
     return send(chatId, '🔎 Аудитор работает локально: серьёзных нарушений не найдено.');
   }
   const last = (state.log || []).slice(-1)[0];
@@ -588,7 +592,7 @@ export async function startBot() {
   }
   console.log('');
   console.log(`  ЛОРИЯ · Telegram-бот @${me.username}`);
-  console.log(`  ИИ: ${DEMO_MODE ? 'резервный режим' : aiAvailable() ? 'модель подключена' : 'нет ключа'}`);
+  console.log(`  ИИ: ${isDemo() ? 'резервный режим' : aiAvailable() ? 'модель подключена' : 'нет ключа'}`);
   console.log('');
 
   await tg('deleteWebhook', { drop_pending_updates: false });

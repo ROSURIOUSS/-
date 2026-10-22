@@ -9,7 +9,13 @@ import { localAudit, aiAudit } from './auditor.js';
 import { demoOpening, demoTurn } from './demo.js';
 import { DAILY_LIMIT, ENABLE_AI_AUDIT, demoMode } from './config.js';
 
-export const DEMO_MODE = demoMode(aiAvailable());
+/**
+ * Режим без модели. Пересчитывается на каждом шаге: ключ можно ввести
+ * прямо в приложении, и игра сразу начнёт писать сцены мастером.
+ */
+export function isDemo() {
+  return demoMode(aiAvailable());
+}
 
 let turnsServed = 0;
 export function engineStats() {
@@ -143,7 +149,8 @@ function progress(state, entry) {
 // ---------- сцены ----------
 
 export async function openingFor(state, onPhase = () => {}) {
-  if (!DEMO_MODE && aiAvailable()) {
+  let aiError = null;
+  if (!isDemo() && aiAvailable()) {
     try {
       onPhase('writing', {});
       const retrieved = retrieve(state, [state.world.title, state.world.genre, state.world.start].join(' '));
@@ -156,13 +163,14 @@ export async function openingFor(state, onPhase = () => {}) {
       });
       if (plan) {
         bumpUsage(state, usage);
-        return { plan, demo: false };
+        return { plan, demo: false, aiError: null };
       }
     } catch (err) {
-      console.error('[opening] ИИ недоступен:', err?.message);
+      aiError = err?.message || 'Ошибка модели';
+      console.error('[opening] ИИ недоступен:', aiError);
     }
   }
-  return { plan: demoOpening(state), demo: true };
+  return { plan: demoOpening(state), demo: true, aiError };
 }
 
 export function commitPlan(state, plan, { action, roll, demo }) {
@@ -267,7 +275,7 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
   let demo = false;
   let aiError = null;
 
-  if (!DEMO_MODE && aiAvailable() && !usageCheck(state)) {
+  if (!isDemo() && aiAvailable() && !usageCheck(state)) {
     state.audit.push({
       turn: state.scene.turn,
       at: Date.now(),
@@ -277,7 +285,7 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
     });
   }
 
-  if (!DEMO_MODE && aiAvailable() && usageCheck(state)) {
+  if (!isDemo() && aiAvailable() && usageCheck(state)) {
     try {
       onPhase('writing', {});
       const retrieved = retrieve(state, action);
@@ -294,6 +302,13 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
     } catch (err) {
       aiError = err?.message || 'Ошибка модели';
       console.error('[turn] ИИ недоступен, включаю резерв:', aiError);
+      state.audit.push({
+        turn: state.scene.turn,
+        at: Date.now(),
+        kind: 'ai-error',
+        severity: 'soft',
+        message: String(aiError).slice(0, 300)
+      });
       plan = null;
     }
   }
@@ -305,7 +320,7 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
 
   const { turnEntry } = commitPlan(state, plan, { action, roll, demo });
 
-  if (audit && !demo && !DEMO_MODE && ENABLE_AI_AUDIT) {
+  if (audit && !demo && !isDemo() && ENABLE_AI_AUDIT) {
     try {
       onPhase('auditing', {});
       const result = await aiAudit(state, turnEntry);
@@ -391,10 +406,10 @@ export async function startNewGame({ worldId, customWorld, hero, difficulty }, o
   const state = createGame({ worldId, customWorld, hero, difficulty });
   if (customWorld?.title) state.world.custom = true;
   state.origin = customWorld?.title ? 'web-custom' : 'web';
-  const { plan, demo } = await openingFor(state, onPhase);
+  const { plan, demo, aiError } = await openingFor(state, onPhase);
   commitPlan(state, plan, { action: 'Начало истории', roll: null, demo });
   await saveGame(state);
-  return { state, demo };
+  return { state, demo, aiError };
 }
 
 /** Копия игры для «ветки» — пригодится, если игрок хочет отыграть заново. */
@@ -431,7 +446,7 @@ export async function levelUp(state, choiceId) {
 
 /** Уплотнение памяти второй моделью. */
 export async function compactStateMemory(state) {
-  if (DEMO_MODE || !aiAvailable()) {
+  if (isDemo() || !aiAvailable()) {
     throw new AIError('Уплотнение памяти требует подключённой модели.', { status: 400 });
   }
   if (!usageCheck(state)) throw new AIError('Дневной лимит запросов исчерпан.', { status: 429 });
