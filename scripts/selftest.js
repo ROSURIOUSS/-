@@ -11,6 +11,7 @@ const engine = await import('../server/engine.js');
 const { sanitizeAction, normalizePlan, commitPlan } = engine;
 const { migrate, exportMarkdown } = await import('../server/store.js');
 const { guessStat, actionDifficulty, resolveCheck } = await import('../server/dice.js');
+const { parseModelJson } = await import('../server/ai.js');
 
 let passed = 0;
 let failed = 0;
@@ -339,6 +340,69 @@ test('улучшение «+1 рывок» увеличивает запас и 
   assert.equal(res.ok, true);
   assert.equal(g.hero.maxBoosts, 2);
   assert.equal(g.hero.boosts, 2);
+});
+
+// ---- устойчивость к «грязному» ответу модели ----
+test('JSON в markdown-ограждении разбирается как обычный', () => {
+  const text = '```json\n{"narration":"Ты входишь в зал. Пахнет воском.","options":["идти","ждать","уйти"]}\n```';
+  const { data, mode } = parseModelJson(text);
+  assert.equal(mode, 'direct');
+  assert.ok(data.narration.includes('воском'));
+});
+
+test('оборванный по max_tokens JSON достраивается и не теряет прозу', () => {
+  const narration = 'Ты стоишь у двери, и дверь не открывается. '.repeat(8);
+  const text = `{"narration":${JSON.stringify(narration)},"options":["стучать","уйти","ждать"],"deltas":{"hp":-1,"gold":3}`;
+  const { data, mode } = parseModelJson(text);
+  assert.equal(mode, 'repaired');
+  assert.equal(data.narration.trim(), narration.trim());
+  assert.equal(data.deltas.hp, -1);
+  assert.equal(data.deltas.gold, 3);
+});
+
+test('«сырые» переводы строк внутри строки не ломают разбор', () => {
+  const text = '{"narration":"Первая строка.\nВторая строка.","options":["a","b","c"],"deltas":{}}';
+  const { data } = parseModelJson(text);
+  assert.ok(data, 'разбор вернул null');
+  assert.ok(data.narration.includes('Вторая строка'));
+});
+
+test('обрезанный ответ всё равно даёт сцену, а не пустоту', () => {
+  const text = 'Вот сцена: {"narration": "Свет падает косо, и в нём видна пыль. Ты ждёшь у порога, и никто не выходит.", "options": ["постучать"';
+  const { data, mode } = parseModelJson(text);
+  assert.ok(['repaired', 'salvaged'].includes(mode), `неожиданный режим: ${mode}`);
+  assert.ok(data.narration.length > 40);
+  const plan = normalizePlan(data, { minNarration: 40 });
+  assert.ok(plan, 'normalizePlan не принял восстановленную сцену');
+  assert.equal(plan.options.length, 3, 'варианты не добиты до трёх');
+});
+
+test('починка не превращает мусор в сцену', () => {
+  const { data } = parseModelJson('{"error":"quota exceeded"}');
+  assert.ok(data, 'объект разобран');
+  assert.equal(normalizePlan(data, { minNarration: 40 }), null, 'нормализация должна отвергнуть пустую сцену');
+});
+
+test('пустой ответ модели не выдаётся за сцену', () => {
+  assert.equal(parseModelJson('').data, null);
+  assert.equal(parseModelJson('   ').data, null);
+  assert.equal(parseModelJson('Не могу помочь с этим.').data, null);
+});
+
+test('сцену достаём и из обёртки {scene:…}, и из choices', () => {
+  const wrapped = normalizePlan(
+    {
+      scene: {
+        narration: 'Ты входишь в прокуренный зал, и разговоры стихают по одному. '.repeat(3),
+        choices: ['Сесть у окна', 'Подойти к стойке', 'Уйти, пока не заметили'],
+        deltas: { hp: 0 }
+      }
+    },
+    { minNarration: 60 }
+  );
+  assert.ok(wrapped, 'обёртка не развёрнута');
+  assert.equal(wrapped.options.length, 3);
+  assert.ok(wrapped.options[0].includes('окна'));
 });
 
 console.log(`\n  Итог: ${passed} прошло, ${failed} провалилось\n`);

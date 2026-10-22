@@ -1,5 +1,5 @@
 // Офлайн-оболочка: интерфейс и обложки кэшируются, API — всегда из сети.
-const CACHE = 'loria-v7';
+const CACHE = 'loria-v8';
 const SHELL = [
   '/',
   '/index.html',

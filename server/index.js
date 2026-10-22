@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadEnv } from './env.js';
 loadEnv();
 
-import { aiAvailable, aiConfig, aiStatus, aiKeyInfo, aiDoctorCheck } from './ai.js';
+import { aiAvailable, aiConfig, aiStatus, aiKeyInfo, aiDoctorCheck, modelOptions, resetCatalogCache } from './ai.js';
 import { sanitizeAction, noteCheatAttempt, runTurn, startNewGame, forkGame, compactStateMemory, engineStats, isDemo, rest, rewind, levelUp } from './engine.js';
 import { applySettings, saveSettings, readSettings, maskedKey } from './settings.js';
 import { publicState, levelChoices } from './state.js';
@@ -135,10 +135,24 @@ async function handleApi(req, res, url) {
 
   // Панель «Мастер»: что с ключом и моделью. POST — живая проверка.
   if (url.pathname === '/api/doctor' && (req.method === 'GET' || req.method === 'POST')) {
-    const config = { ...aiKeyInfo(), demo: isDemo(), lastFailure: aiStatus().lastFailure, savedWithApp: Boolean(readSettings().apiKey) };
+    const status = aiStatus();
+    const config = {
+      ...aiKeyInfo(),
+      demo: isDemo(),
+      lastFailure: status.lastFailure,
+      lastSuccess: status.lastSuccess,
+      savedWithApp: Boolean(readSettings().apiKey),
+      savedModel: readSettings().model || ''
+    };
     if (req.method === 'GET') return json(res, 200, { ok: config.valid && !config.demo, ...config });
     const report = await aiDoctorCheck({ timeoutMs: 18000 });
     return json(res, 200, { ...config, ...report });
+  }
+
+  // Список моделей для выбора в приложении.
+  if (req.method === 'GET' && url.pathname === '/api/models') {
+    const list = await modelOptions();
+    return json(res, 200, { ...list, lastSuccess: aiStatus().lastSuccess });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/settings') {
@@ -148,15 +162,47 @@ async function handleApi(req, res, url) {
     } catch (err) {
       return json(res, 413, { error: err.message });
     }
-    const key = String(body?.apiKey || '').trim();
-    if (!/^sk-or-[A-Za-z0-9_-]{8,}$/.test(key)) {
-      return json(res, 400, { error: 'Ключ OpenRouter должен начинаться с sk-or- и быть без пробелов.' });
+    const hasKey = typeof body?.apiKey === 'string';
+    const hasModel = typeof body?.model === 'string';
+    if (!hasKey && !hasModel) return json(res, 400, { error: 'Нечего сохранять: нужен ключ или модель.' });
+
+    let keyMaskedNow = null;
+    if (hasKey) {
+      const key = String(body.apiKey).trim();
+      if (!/^sk-or-[A-Za-z0-9_-]{8,}$/.test(key)) {
+        return json(res, 400, { error: 'Ключ OpenRouter должен начинаться с sk-or- и быть без пробелов.' });
+      }
+      saveSettings({ apiKey: key });
+      process.env.OPENROUTER_API_KEY = key;
+      resetCatalogCache();
+      keyMaskedNow = maskedKey(key);
     }
-    saveSettings({ apiKey: key });
-    process.env.OPENROUTER_API_KEY = key;
+
+    let modelNow = null;
+    if (hasModel) {
+      const model = String(body.model).trim();
+      if (model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,90}$/.test(model)) {
+        return json(res, 400, { error: 'Недопустимое имя модели.' });
+      }
+      saveSettings({ model });
+      if (model) process.env.LORIA_MODEL = model;
+      else delete process.env.LORIA_MODEL;
+      resetCatalogCache();
+      modelNow = aiConfig().primary;
+    }
+
     const report = await aiDoctorCheck({ timeoutMs: 18000 });
-    console.log(`[settings] ключ обновлён (…${key.slice(-4)}), проверка: ${report.ok ? 'ок' : report.reason}`);
-    return json(res, 200, { ok: true, saved: true, keyMasked: maskedKey(key), ...report });
+    console.log(
+      `[settings] обновлено: ${keyMaskedNow ? `ключ …${keyMaskedNow.slice(-4)}` : 'ключ без изменений'}` +
+        `${modelNow ? `, модель ${modelNow}` : ''}; проверка: ${report.ok ? 'ок' : report.reason}`
+    );
+    return json(res, 200, {
+      ok: true,
+      saved: true,
+      keyMasked: keyMaskedNow,
+      model: modelNow || aiKeyInfo().model,
+      ...report
+    });
   }
 
   // Фокус уже открытого окна: лаунчер подменяет обработчик на живое окно.
@@ -217,13 +263,13 @@ async function handleApi(req, res, url) {
       return json(res, 429, { error: 'Слишком много новых историй за час. Дай миру передохнуть.' });
     }
     try {
-      const { state, demo, aiError } = await startNewGame({
+      const { state, demo, aiError, ai } = await startNewGame({
         worldId: body.worldId,
         customWorld: body.customWorld,
         hero: body.hero || {},
         difficulty: body.difficulty
       });
-      return json(res, 200, { state: publicState(state), demo, aiError });
+      return json(res, 200, { state: publicState(state), demo, aiError, ai: ai || null });
     } catch (err) {
       console.error('[create]', err);
       return json(res, 500, { error: 'Мир не открылся. Попробуй ещё раз.' });
@@ -333,6 +379,7 @@ async function handleApi(req, res, url) {
           turn: result.turn,
           demo: result.demo,
           aiError: result.aiError,
+          ai: result.ai || null,
           memoryIndex: memoryIndexSize(result.state)
         });
       }
@@ -360,6 +407,7 @@ async function handleApi(req, res, url) {
           turn: result.turn,
           demo: result.demo,
           aiError: result.aiError,
+          ai: result.ai || null,
           memoryIndex: memoryIndexSize(result.state)
         });
       } catch (err) {

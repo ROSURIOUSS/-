@@ -145,6 +145,8 @@ await test('ход: серверный бросок, рывок и валида�
   assert.equal(turn.check.boosted, true, 'рывок не сработал');
   assert.equal(state.hero.boosts, 0, 'заряд рывка не списан');
   assert.ok(turn.narration.includes('Взломать') || turn.narration.length > 100);
+  assert.ok(res.data.ai?.model, 'в ответе нет телеметрии модели');
+  assert.ok(res.data.ai.ms >= 0, 'нет времени ответа');
   assert.equal(state.scene.turn, 3);
   assert.equal(state.log.length, 2);
   assert.ok(state.memory.chunks.length > 0, 'память не пополнилась');
@@ -322,6 +324,43 @@ await test('ключ можно ввести в приложении, и реж�
   const health = await api('GET', '/api/health');
   assert.equal(health.data.demo, false);
   assert.equal(health.data.ai, true);
+});
+
+await test('модель выбирается в приложении и применяется сразу', async () => {
+  const list = await api('GET', '/api/models');
+  assert.equal(list.status, 200);
+  assert.ok(Array.isArray(list.data.options) && list.data.options.length >= 1, 'пустой список моделей');
+  const target = list.data.options.find((o) => o.id !== list.data.current)?.id;
+  assert.ok(target, 'нет альтернативной модели');
+  const res = await api('POST', '/api/settings', { model: target });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.model, target);
+  const doctor = await api('GET', '/api/doctor');
+  assert.equal(doctor.data.model, target, 'модель не применилась');
+  const back = await api('POST', '/api/settings', { model: 'mock/loria-scene' });
+  assert.equal(back.data.model, 'mock/loria-scene');
+});
+
+await test('кривое имя модели отклоняется, настройки не портятся', async () => {
+  const res = await api('POST', '/api/settings', { model: 'плохое имя модели' });
+  assert.equal(res.status, 400);
+  const doctor = await api('GET', '/api/doctor');
+  assert.equal(doctor.data.model, 'mock/loria-scene');
+});
+
+await test('оборванный JSON модели не отправляет игрока к резервному рассказчику', async () => {
+  const set = await api('POST', '/api/settings', { model: 'mock/loria-truncated' });
+  assert.equal(set.status, 200);
+  const res = await api('POST', '/api/games', {
+    worldId: 'ash',
+    hero: { name: 'Обрыв', archetypeId: 'scholar' },
+    difficulty: 'grim'
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.demo, false, 'игрока отправили к резерву вместо починки JSON');
+  assert.ok(res.data.state.log[0].narration.length > 150, 'сцена слишком короткая после починки');
+  assert.equal(res.data.ai?.repaired, true, 'в телеметрии нет отметки о починке');
+  await api('POST', '/api/settings', { model: 'mock/loria-scene' });
 });
 
 await test('некорректные запросы не роняют сервер', async () => {

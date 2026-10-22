@@ -71,9 +71,15 @@ export function noteCheatAttempt(state, action) {
 /** Проверка и нормализация ответа модели. */
 export function normalizePlan(data, { minNarration = 120 } = {}) {
   if (!data || typeof data !== 'object') return null;
+  // Некоторые модели заворачивают сцену в {scene:…} / {result:…} — разворачиваем.
+  const inner = [data.scene, data.result, data.response, data.data].find(
+    (v) => v && typeof v === 'object' && typeof v.narration === 'string'
+  );
+  if (inner) data = inner;
   const narration = String(data.narration || '').trim();
   if (narration.length < minNarration) return null;
-  const options = (Array.isArray(data.options) ? data.options : [])
+  const rawOptions = Array.isArray(data.options) ? data.options : Array.isArray(data.choices) ? data.choices : [];
+  const options = rawOptions
     .map((o) =>
       String(o && typeof o === 'object' ? o.text || o.label || o.action || o.title || '' : o ?? '')
         .replace(/\s+/g, ' ')
@@ -114,11 +120,19 @@ function mergeUsage(a, b) {
 }
 
 /** Запрос сцены с одной попыткой починки, если модель вернула не JSON. */
-async function askScene({ system, user, temperature = 0.95, maxTokens = 1400, minNarration }) {
+async function askScene({ system, user, temperature = 0.85, maxTokens = 1800, minNarration }) {
   const first = await askJson({ system, user, temperature, maxTokens });
   let plan = normalizePlan(first.data, { minNarration });
   if (plan) {
-    return { plan, usage: first.usage, model: first.model, repaired: false };
+    return {
+      plan,
+      usage: first.usage,
+      model: first.model,
+      latencyMs: first.latencyMs,
+      degraded: Boolean(first.degraded),
+      repaired: first.parseMode !== 'direct',
+      finishReason: first.finishReason
+    };
   }
 
   const strict = `${system}
@@ -128,16 +142,19 @@ async function askScene({ system, user, temperature = 0.95, maxTokens = 1400, mi
     system: strict,
     user: `${user}
 
-(Предыдущий ответ не соответствовал формату. Строго JSON.)`,
-    temperature: Math.max(0.4, temperature - 0.35),
-    maxTokens
+(Предыдущий ответ не соответствовал формату: ${first.finishReason === 'length' ? 'оборвался по лимиту токенов' : 'не разобрался как JSON'}. Верни короткую завершённую сцену строго по схеме.)`,
+    temperature: Math.max(0.4, temperature - 0.3),
+    maxTokens: Math.min(4096, Math.round(maxTokens * 1.3))
   });
   plan = normalizePlan(second.data, { minNarration });
   return {
     plan,
     usage: mergeUsage(first.usage, second.usage),
     model: second.model,
-    repaired: true
+    latencyMs: (first.latencyMs || 0) + (second.latencyMs || 0),
+    degraded: Boolean(second.degraded || first.degraded),
+    repaired: true,
+    finishReason: second.finishReason
   };
 }
 
@@ -154,23 +171,34 @@ export async function openingFor(state, onPhase = () => {}) {
     try {
       onPhase('writing', {});
       const retrieved = retrieve(state, [state.world.title, state.world.genre, state.world.start].join(' '));
-      const { plan, usage } = await askScene({
+      const scene = await askScene({
         system: buildSystemPrompt(state, retrieved),
         user: buildOpeningPrompt(state),
-        temperature: 1,
-        maxTokens: 1500,
+        temperature: 0.9,
+        maxTokens: 2000,
         minNarration: 180
       });
-      if (plan) {
-        bumpUsage(state, usage);
-        return { plan, demo: false, aiError: null };
+      if (scene.plan) {
+        bumpUsage(state, scene.usage);
+        return { plan: scene.plan, demo: false, aiError: null, ai: sceneMeta(scene) };
       }
     } catch (err) {
       aiError = err?.message || 'Ошибка модели';
       console.error('[opening] ИИ недоступен:', aiError);
     }
   }
-  return { plan: demoOpening(state), demo: true, aiError };
+  return { plan: demoOpening(state), demo: true, aiError, ai: null };
+}
+
+/** Компактная телеметрия хода: видно, кто написал сцену и сколько это заняло. */
+function sceneMeta(scene) {
+  if (!scene) return null;
+  return {
+    model: scene.model || null,
+    ms: scene.latencyMs || null,
+    repaired: Boolean(scene.repaired),
+    degraded: Boolean(scene.degraded)
+  };
 }
 
 export function commitPlan(state, plan, { action, roll, demo }) {
@@ -274,14 +302,16 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
   let plan = null;
   let demo = false;
   let aiError = null;
+  let aiInfo = null;
 
   if (!isDemo() && aiAvailable() && !usageCheck(state)) {
+    aiError = `Дневной лимит запросов к модели исчерпан (${DAILY_LIMIT}). Сцену пишет резервный рассказчик.`;
     state.audit.push({
       turn: state.scene.turn,
       at: Date.now(),
       kind: 'limit',
       severity: 'soft',
-      message: `Дневной лимит запросов к модели исчерпан (${DAILY_LIMIT}). Ходы пишет резервный рассказчик.`
+      message: aiError
     });
   }
 
@@ -289,16 +319,17 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
     try {
       onPhase('writing', {});
       const retrieved = retrieve(state, action);
-      const { plan: generated, usage } = await askScene({
+      const scene = await askScene({
         system: buildSystemPrompt(state, retrieved),
         user: buildTurnPrompt(state, { action, roll }),
-        temperature: 0.95,
-        maxTokens: 1500,
+        temperature: 0.85,
+        maxTokens: 1900,
         minNarration: 120
       });
-      plan = generated;
+      plan = scene.plan;
       if (!plan) throw new AIError('Модель вернула пустую сцену', { status: 502 });
-      bumpUsage(state, usage);
+      aiInfo = sceneMeta(scene);
+      bumpUsage(state, scene.usage);
     } catch (err) {
       aiError = err?.message || 'Ошибка модели';
       console.error('[turn] ИИ недоступен, включаю резерв:', aiError);
@@ -350,7 +381,7 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
 
   await saveGame(state);
   turnsServed += 1;
-  return { state, turn: turnEntry, demo, aiError };
+  return { state, turn: turnEntry, demo, aiError, ai: aiInfo };
 }
 
 const MAX_SNAPSHOTS = 2;
@@ -406,10 +437,10 @@ export async function startNewGame({ worldId, customWorld, hero, difficulty }, o
   const state = createGame({ worldId, customWorld, hero, difficulty });
   if (customWorld?.title) state.world.custom = true;
   state.origin = customWorld?.title ? 'web-custom' : 'web';
-  const { plan, demo, aiError } = await openingFor(state, onPhase);
+  const { plan, demo, aiError, ai } = await openingFor(state, onPhase);
   commitPlan(state, plan, { action: 'Начало истории', roll: null, demo });
   await saveGame(state);
-  return { state, demo, aiError };
+  return { state, demo, aiError, ai: ai || null };
 }
 
 /** Копия игры для «ветки» — пригодится, если игрок хочет отыграть заново. */

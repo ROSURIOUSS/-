@@ -611,6 +611,10 @@ button { cursor: pointer; }
 .overlay__card h2 { font-size: clamp(28px, 4vw, 40px); margin-bottom: 6px; }
 .overlay__card p { color: var(--ink-dim); font-size: 14.5px; }
 .overlay__actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 22px; }
+.ai-meta { color: var(--muted); font-size: 10.5px; letter-spacing: 0.02em; }
+.ai-meta.is-bad { color: #d8867b; }
+.ai-meta:not(:empty)::before { content: "· "; color: var(--line-strong); }
+
 .ai-rows { display: grid; gap: 6px; margin: 14px 0 0; }
 .ai-rows > div { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; font-size: 12.5px; color: var(--ink-dim); border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 6px; }
 .ai-rows span { flex: 0 0 auto; color: var(--muted); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }

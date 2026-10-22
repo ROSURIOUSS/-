@@ -120,7 +120,12 @@ const server = http.createServer((req, res) => {
       return res.end(JSON.stringify({ error: { message: 'bad json' } }));
     }
     const payload = handle(body);
-    const choice = { message: { role: 'assistant', content: JSON.stringify(payload) } };
+    // Специальная модель для проверки починки оборванного JSON.
+    let content = JSON.stringify(payload);
+    if (body.model === 'mock/loria-truncated') {
+      content = content.slice(0, Math.floor(content.length * 0.72));
+    }
+    const choice = { message: { role: 'assistant', content } };
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify({

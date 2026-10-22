@@ -14,20 +14,26 @@ const FREE_FALLBACKS = [
 
 const DEFAULT_FALLBACKS = [
   'google/gemini-2.5-flash',
-  'google/gemini-2.0-flash-001',
-  'anthropic/claude-3.5-haiku',
+  'google/gemini-2.5-pro',
+  'anthropic/claude-sonnet-4',
+  'anthropic/claude-3.7-sonnet',
+  'openai/gpt-4.1-mini',
   'openai/gpt-4o-mini',
+  'google/gemini-2.0-flash-001',
   'deepseek/deepseek-chat-v3-0324',
   'qwen/qwen-2.5-72b-instruct',
   'meta-llama/llama-3.3-70b-instruct'
 ];
 
 let lastFailure = null;
+let lastSuccess = null;
 
 export function aiStatus() {
   return {
     lastFailure,
-    lastFailureAt: lastFailure ? lastFailure.at : null
+    lastFailureAt: lastFailure ? lastFailure.at : null,
+    lastSuccess,
+    lastSuccessAt: lastSuccess ? lastSuccess.at : null
   };
 }
 
@@ -128,6 +134,50 @@ export async function pingModel(model, { timeoutMs = 18000 } = {}) {
 }
 
 /**
+ * Список моделей для панели «Мастер»: сильные платные, бесплатные и текущая.
+ * Каталог нужен, чтобы не предлагать удалённые модели; без сети — статический список.
+ */
+export async function modelOptions() {
+  const { primary } = aiConfig();
+  const ids = await catalog();
+  const free = (ids.length ? ids : FREE_FALLBACKS).filter((id) => id.endsWith(':free'));
+  const paid = (ids.length ? ids : DEFAULT_FALLBACKS).filter((id) => !id.endsWith(':free'));
+  const preferPaid = [
+    'google/gemini-2.5-pro',
+    'anthropic/claude-sonnet-4',
+    'anthropic/claude-3.7-sonnet',
+    'openai/gpt-4.1',
+    'openai/gpt-4.1-mini',
+    'google/gemini-2.5-flash',
+    'openai/gpt-4o-mini'
+  ];
+  const rankedPaid = [
+    ...preferPaid.filter((id) => ids.length === 0 || ids.includes(id)),
+    ...paid.filter((id) => !preferPaid.includes(id))
+  ];
+  const rankedFree = [
+    ...['deepseek', 'qwen', 'llama', 'gemini', 'mistral']
+      .map((family) => free.find((id) => id.includes(family) && !/r1|reason/i.test(id)))
+      .filter(Boolean),
+    ...free
+  ];
+  const seen = new Set();
+  const options = [];
+  for (const id of [primary, ...rankedPaid, ...rankedFree]) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    options.push({ id, free: id.endsWith(':free'), current: id === primary });
+    if (options.length >= 18) break;
+  }
+  return { current: primary, catalog: ids.length > 0, options };
+}
+
+/** Сбросить кэш каталога: после смены ключа список моделей может отличаться. */
+export function resetCatalogCache() {
+  catalogCache = { at: 0, ids: null };
+}
+
+/**
  * Живая проверка: основная модель, при отказе — бесплатная.
  * Не трогает сохранения и лимиты игр.
  */
@@ -141,7 +191,9 @@ export async function aiDoctorCheck({ timeoutMs = 18000 } = {}) {
   const results = [await pingModel(primary, { timeoutMs })];
   const needsFallback = !results[0].ok && [402, 403, 404].includes(results[0].status);
   if (needsFallback) {
-    const free = FREE_FALLBACKS.find((m) => m !== primary);
+    // Сначала берём бесплатную модель из живого каталога: статический список быстро устаревает.
+    const live = (await freeFromCatalog()).filter((m) => m !== primary && !/r1|reason/i.test(m));
+    const free = live[0] || FREE_FALLBACKS.find((m) => m !== primary);
     if (free) results.push(await pingModel(free, { timeoutMs }));
   }
   const ok = results.some((r) => r.ok);
@@ -154,22 +206,61 @@ export async function aiDoctorCheck({ timeoutMs = 18000 } = {}) {
   };
 }
 
-function tryParseJson(text) {
-  if (!text) return null;
-  let cleaned = String(text).trim();
-  cleaned = cleaned.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    /* ищем первый сбалансированный объект */
-  }
-  const start = cleaned.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0;
+function stripFences(text) {
+  return String(text || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/```(?:json|JSON)?/g, '')
+    .replace(/```/g, '')
+    .trim();
+}
+
+/** Модели иногда оставляют в JSON настоящие переводы строк внутри строк — чиним. */
+function escapeControlChars(text) {
+  let out = '';
   let inStr = false;
   let esc = false;
-  for (let i = start; i < cleaned.length; i++) {
-    const ch = cleaned[i];
+  for (const ch of text) {
+    if (inStr) {
+      if (esc) {
+        out += ch;
+        esc = false;
+        continue;
+      }
+      if (ch === '\\') {
+        out += ch;
+        esc = true;
+        continue;
+      }
+      if (ch === '"') {
+        out += ch;
+        inStr = false;
+        continue;
+      }
+      if (ch === '\n') {
+        out += '\\n';
+        continue;
+      }
+      if (ch === '\r') continue;
+      if (ch === '\t') {
+        out += '\\t';
+        continue;
+      }
+      if (ch < ' ') continue;
+      out += ch;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    out += ch;
+  }
+  return out;
+}
+
+/** Достраивает оборванный JSON: закрывает строку и открытые скобки. */
+function balanceJson(text) {
+  const stack = [];
+  let inStr = false;
+  let esc = false;
+  for (const ch of text) {
     if (inStr) {
       if (esc) esc = false;
       else if (ch === '\\') esc = true;
@@ -177,24 +268,168 @@ function tryParseJson(text) {
       continue;
     }
     if (ch === '"') inStr = true;
-    else if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        try {
-          return JSON.parse(cleaned.slice(start, i + 1));
-        } catch {
-          return null;
-        }
-      }
-    }
+    else if (ch === '{' || ch === '[') stack.push(ch);
+    else if (ch === '}' || ch === ']') stack.pop();
   }
-  return null;
+  let out = text;
+  if (inStr) out += '"';
+  out = out.replace(/[\s,]+$/, '');
+  // обрыв на имени поля: {"narration":"…","opti
+  out = out.replace(/,\s*"[^"\\]*$/, '');
+  if (/:\s*$/.test(out)) out += ' null';
+  for (let i = stack.length - 1; i >= 0; i--) out += stack[i] === '{' ? '}' : ']';
+  return out.replace(/,\s*([}\]])/g, '$1');
 }
 
-async function callModel({ model, system, user, temperature = 0.95, maxTokens = 1200, signal, jsonMode = true }) {
+/** Отрезает последний незавершённый элемент объекта и балансирует остаток. */
+function dropLastMember(text) {
+  let inStr = false;
+  let esc = false;
+  let lastComma = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === ',') lastComma = i;
+  }
+  if (lastComma < 0) return null;
+  return balanceJson(text.slice(0, lastComma));
+}
+
+function parseLoose(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function extractStringField(text, field) {
+  const re = new RegExp(`"${field}"\\s*:\\s*"`, 'i');
+  const m = re.exec(text);
+  if (!m) return '';
+  let i = m.index + m[0].length;
+  let out = '';
+  let esc = false;
+  while (i < text.length) {
+    const ch = text[i];
+    if (esc) {
+      out += ch;
+      esc = false;
+      i += 1;
+      continue;
+    }
+    if (ch === '\\') {
+      out += ch;
+      esc = true;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') break;
+    out += ch;
+    i += 1;
+  }
+  try {
+    return JSON.parse(`"${out}"`);
+  } catch {
+    return out.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\t/g, '\t');
+  }
+}
+
+function extractStringArray(text, field) {
+  const re = new RegExp(`"${field}"\\s*:\\s*\\[`, 'i');
+  const m = re.exec(text);
+  if (!m) return [];
+  const rest = text.slice(m.index + m[0].length);
+  const out = [];
+  const itemRe = /"((?:[^"\\]|\\.)*)"/g;
+  let match;
+  let guard = 0;
+  while ((match = itemRe.exec(rest)) && guard < 8) {
+    guard += 1;
+    try {
+      out.push(JSON.parse(`"${match[1]}"`));
+    } catch {
+      out.push(match[1]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Разбор ответа модели. Прощает markdown-ограждения, обрывы по max_tokens
+ * и «сырые» переводы строк; в худшем случае вытаскивает хотя бы прозу.
+ * @returns {{data: object|null, mode: 'direct'|'repaired'|'salvaged'|'broken'|'empty'}}
+ */
+export function parseModelJson(text) {
+  const raw = stripFences(text);
+  if (!raw) return { data: null, mode: 'empty' };
+
+  const direct = parseLoose(raw);
+  if (direct && typeof direct === 'object') return { data: direct, mode: 'direct' };
+
+  const start = raw.indexOf('{');
+  if (start === -1) return { data: null, mode: 'broken' };
+  const body = escapeControlChars(raw.slice(start, raw.lastIndexOf('}') + 1 || raw.length));
+
+  const balanced = balanceJson(body);
+  let parsed = parseLoose(balanced);
+  if (parsed && typeof parsed === 'object') return { data: parsed, mode: 'repaired' };
+
+  let trimmed = balanced;
+  for (let i = 0; i < 4; i++) {
+    trimmed = dropLastMember(trimmed);
+    if (!trimmed) break;
+    parsed = parseLoose(trimmed);
+    if (parsed && typeof parsed === 'object') return { data: parsed, mode: 'repaired' };
+  }
+
+  // Совсем плохой JSON: спасаем прозу и варианты, остальное заполнит normalizePlan.
+  const narration = extractStringField(body, 'narration');
+  if (narration && narration.trim().length >= 60) {
+    const deltas = {};
+    for (const key of ['hp', 'energy', 'gold', 'tension']) {
+      const m2 = new RegExp(`"${key}"\\s*:\\s*(-?\\d{1,3})`).exec(body);
+      if (m2) deltas[key] = Number(m2[1]);
+    }
+    return {
+      data: {
+        narration,
+        options: extractStringArray(body, 'options').slice(0, 3),
+        deltas,
+        facts: [],
+        npcs: [],
+        dead: /"dead"\s*:\s*true/.test(body)
+      },
+      mode: 'salvaged'
+    };
+  }
+  return { data: null, mode: 'broken' };
+}
+
+/** Совместимость: старый вызов возвращает только данные. */
+function tryParseJson(text) {
+  return parseModelJson(text).data;
+}
+
+/** Для каких моделей просить меньше «размышлений» — иначе они съедают бюджет ответа. */
+function reasoningParams(model) {
+  const id = String(model || '').toLowerCase();
+  if (/gemini-2\.5|thinking|o3|o4-mini|gpt-5|deepseek-r1|qwen3/.test(id)) {
+    return { reasoning: { effort: 'low', exclude: true } };
+  }
+  return {};
+}
+
+async function callModel({ model, system, user, temperature = 0.85, maxTokens = 1800, signal, jsonMode = true }) {
   const { key } = aiConfig();
   if (!key) throw new AIError('Ключ OpenRouter не задан', { status: 0 });
+  const started = Date.now();
 
   const res = await fetch(`${baseUrl()}/chat/completions`, {
     method: 'POST',
@@ -212,7 +447,9 @@ async function callModel({ model, system, user, temperature = 0.95, maxTokens = 
         { role: 'user', content: user }
       ],
       temperature,
+      top_p: 0.92,
       max_tokens: maxTokens,
+      ...reasoningParams(model),
       ...(jsonMode ? { response_format: { type: 'json_object' } } : {})
     })
   });
@@ -255,14 +492,25 @@ async function callModel({ model, system, user, temperature = 0.95, maxTokens = 
     });
   }
 
-  const content = json?.choices?.[0]?.message?.content;
-  if (!content) throw new AIError('Пустой ответ модели', { status: 502, retryable: true });
+  const choice = json?.choices?.[0] || {};
+  const rawContent = choice?.message?.content;
+  const content = Array.isArray(rawContent)
+    ? rawContent.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('')
+    : rawContent;
+  if (!content) {
+    const reason = json?.choices?.[0]?.finish_reason || json?.error?.message || 'без текста';
+    throw new AIError(`Модель вернула пустой ответ (${reason})`, { status: 502, retryable: true });
+  }
 
+  const parsed = parseModelJson(content);
   return {
-    data: tryParseJson(content),
+    data: parsed.data,
+    parseMode: parsed.mode,
+    finishReason: choice?.finish_reason || null,
     raw: content,
     usage: json?.usage || null,
-    model: json?.model || model
+    model: json?.model || model,
+    latencyMs: Date.now() - started
   };
 }
 
@@ -338,8 +586,8 @@ export async function modelPlan() {
 export async function askJson({
   system,
   user,
-  temperature = 0.95,
-  maxTokens = 1200,
+  temperature = 0.85,
+  maxTokens = 1800,
   timeoutMs = 75000,
   budgetMs = 70000
 }) {
@@ -362,21 +610,49 @@ export async function askJson({
       if (remaining < 2500) break;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
+      // повтор пишем холоднее и чуть длиннее: так реже рвётся JSON и сцена не «плывёт»
+      const attemptTemperature = attempt === 0 ? temperature : Math.max(0.45, temperature - 0.3);
+      const attemptTokens = attempt === 0 ? maxTokens : Math.min(4096, Math.round(maxTokens * 1.35));
       try {
         const result = await callModel({
           model,
           system,
           user,
-          temperature,
-          maxTokens,
+          temperature: attemptTemperature,
+          maxTokens: attemptTokens,
           signal: controller.signal,
           jsonMode
         });
         if (!result.data) {
-          throw new AIError('Модель вернула невалидный JSON', { status: 502, retryable: true, detail: result.raw.slice(0, 300) });
+          const cut = result.finishReason === 'length';
+          throw new AIError(
+            cut
+              ? 'Модель не уложилась в лимит ответа и оборвала JSON (finish_reason=length).'
+              : 'Модель вернула ответ, из которого не удалось собрать сцену.',
+            {
+              status: 502,
+              retryable: true,
+              truncated: cut,
+              parseMode: result.parseMode,
+              detail: result.raw.slice(0, 300)
+            }
+          );
         }
         lastFailure = null;
-        return { ...result, attempts: attempted.concat([{ model, attempt: attempt + 1, ok: true }]) };
+        lastSuccess = {
+          model: result.model,
+          at: Date.now(),
+          ms: result.latencyMs,
+          repaired: result.parseMode !== 'direct',
+          finishReason: result.finishReason
+        };
+        return {
+          ...result,
+          degraded: result.parseMode === 'salvaged',
+          attempts: attempted.concat([
+            { model, attempt: attempt + 1, ok: true, repaired: result.parseMode !== 'direct', ms: result.latencyMs }
+          ])
+        };
       } catch (err) {
         const error =
           err?.name === 'AbortError'
@@ -409,6 +685,11 @@ export async function askJson({
           continue;
         }
 
+        // Обрыв по лимиту токенов — не повод менять модель: повторяем ту же с большим бюджетом.
+        if (error.truncated && attempt === 0) {
+          await sleep(250);
+          continue;
+        }
         const nextModel = error.modelMissing || error.status === 400 || error.status === 404;
         if (nextModel) break;
         if (attempt === 0) await sleep(500 + Math.floor(Math.random() * 400));

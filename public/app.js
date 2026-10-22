@@ -17,7 +17,8 @@ const store = {
   boostArmed: false,
   earlier: [],
   earlierFrom: null,
-  archive: { q: '', filter: 'all', sort: 'recent' }
+  archive: { q: '', filter: 'all', sort: 'recent' },
+  lastAi: null
 };
 
 const STAT_SHORT = { Сила: 'Сила', Ловкость: 'Ловк', Разум: 'Разум', Воля: 'Воля', Харизма: 'Хар' };
@@ -606,6 +607,7 @@ async function createGame() {
     store.game = res.state;
     store.earlier = [];
     store.earlierFrom = res.state.logFrom ?? 0;
+    store.lastAi = res.demo ? { demo: true, error: res.aiError || '' } : res.ai || null;
     localStorage.setItem('loria:last', res.state.id);
     if (res.demo) {
       toast(
@@ -636,6 +638,7 @@ async function openGame(id) {
     store.game = data.state;
     store.earlier = [];
     store.earlierFrom = data.state.logFrom ?? 0;
+    store.lastAi = null;
     store.meta = data;
     localStorage.setItem('loria:last', id);
     setAccent(store.game.world.accent);
@@ -764,6 +767,23 @@ async function loadEarlier() {
   }
 }
 
+function aiMetaText() {
+  const a = store.lastAi;
+  if (!a) return '';
+  if (a.demo) return a.error ? `Резервный рассказчик: ${clampText(a.error, 90)}` : 'Резервный рассказчик';
+  const secs = a.ms ? ` · ${(a.ms / 1000).toFixed(1)} с` : '';
+  const fix = a.repaired ? ' · формат починен' : a.degraded ? ' · ответ частичный' : '';
+  return `Мастер: ${a.model || 'модель'}${secs}${fix}`;
+}
+
+function updateAiMeta() {
+  const el = document.getElementById('ai-meta');
+  if (!el) return;
+  const text = aiMetaText();
+  el.textContent = text;
+  el.classList.toggle('is-bad', Boolean(store.lastAi?.demo || store.lastAi?.degraded));
+}
+
 function renderPlay(data) {
   const s = store.game;
   const log = s.log || [];
@@ -811,6 +831,7 @@ function renderPlay(data) {
         </div>
         <div class="composer__hint">
           <span class="keys-hint">1–6 — варианты · ↑ — прошлые действия · H — лист героя · ? — подсказка</span>
+          <span class="ai-meta" id="ai-meta">${esc(aiMetaText())}</span>
           ${store.boostArmed ? '<b style="color:var(--accent)">Рывок заряжен:</b> при провале сервер перебросит кубик и возьмёт лучший результат.' : 'Бросок делает сервер. Мастер не может его отменить.'}
           ${store.content.ai.available ? (store.content.ai.lastFailure ? ' Модель не ответила — сцены пишет резерв.' : '') : ' Резервный режим.'}
         </div>
@@ -1186,6 +1207,9 @@ async function submitAction(action) {
 function finishTurn(payload) {
   document.getElementById('typing-indicator')?.remove();
   store.boostArmed = false;
+  store.lastAi = payload.demo
+    ? { demo: true, error: payload.aiError || '' }
+    : payload.ai || null;
   const prevLog = store.game?.log || [];
   store.game = payload.state;
   // Если окно истории сдвинулось, выпавшие ходы не теряем — они ушли в «ранние».
@@ -1204,6 +1228,7 @@ function finishTurn(payload) {
   refreshHeader();
   syncActionButtons();
   updateSheet();
+  updateAiMeta();
   renderChoices(payload.state);
   if (payload.demo) {
     toast(
@@ -1292,6 +1317,14 @@ function aiRowsHTML(d) {
     ['Источник', d.savedWithApp ? 'введён в приложении' : d.present ? '.env или переменные окружения' : '—'],
     ['Модель', d.model || '—'],
     ['Режим', d.demo ? 'резервный рассказчик' : d.valid ? 'мастер подключён' : 'без модели'],
+    [
+      'Последний ответ',
+      d.lastSuccess
+        ? `${d.lastSuccess.model}${d.lastSuccess.ms ? ` · ${(d.lastSuccess.ms / 1000).toFixed(1)} с` : ''}${
+            d.lastSuccess.repaired ? ' · формат починен' : ''
+          }`
+        : '—'
+    ],
     ['Последний сбой', d.lastFailure ? clampText(d.lastFailure.message, 140) : '—']
   ];
   return `<div class="ai-rows">${rows
@@ -1327,6 +1360,18 @@ function showAIPanel() {
       <div class="eyebrow">Мастер</div>
       <h2>Модель</h2>
       <div id="ai-panel-body"><p class="mem-empty">Смотрю настройки…</p></div>
+
+      <label class="eyebrow" for="ai-model" style="display:block;margin-top:18px">Модель мастера</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="ai-model" class="input" style="flex:1;min-width:0" aria-label="Модель мастера">
+          <option value="">Загружаю список…</option>
+        </select>
+        <button class="btn" data-act="ai-model-save" title="Применить модель">Применить</button>
+      </div>
+      <div class="composer__hint" style="text-align:left;margin-top:6px">
+        Сильнее модель — плотнее сцены. Бесплатные помечены ·free: они медленнее и иногда рвут JSON.
+      </div>
+
       <label class="eyebrow" for="ai-key" style="display:block;margin-top:18px">Ключ OpenRouter</label>
       <input id="ai-key" class="input" type="password" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false" />
       <div class="composer__hint" style="text-align:left;margin-top:6px">
@@ -1342,6 +1387,49 @@ function showAIPanel() {
     </div>
   </div>`;
   refreshAIPanel();
+  refreshModelList();
+}
+
+async function refreshModelList() {
+  const select = document.getElementById('ai-model');
+  if (!select) return;
+  try {
+    const data = await api('/api/models');
+    const options = data.options || [];
+    select.innerHTML = options
+      .map(
+        (m) =>
+          `<option value="${esc(m.id)}" ${m.id === data.current ? 'selected' : ''}>${esc(
+            (m.free ? '·free · ' : '') + m.id
+          )}</option>`
+      )
+      .join('');
+  } catch (err) {
+    select.innerHTML = `<option value="">${esc('Список недоступен: ' + err.message)}</option>`;
+  }
+}
+
+async function saveAIModel() {
+  const select = document.getElementById('ai-model');
+  const model = (select?.value || '').trim();
+  if (!model) return toast('Выбери модель', true);
+  const log = document.getElementById('ai-panel-log');
+  if (log) log.innerHTML = '<p class="mem-empty">Применяю модель и проверяю ответ…</p>';
+  try {
+    const data = await api('/api/settings', { method: 'POST', body: JSON.stringify({ model }) });
+    if (log) log.innerHTML = aiResultsHTML(data.results) || `<p class="mem-empty">${esc(data.reason || '')}</p>`;
+    toast(data.ok ? `Модель: ${model}` : 'Модель сохранена, но пока не отвечает', !data.ok);
+    try {
+      if (store.content) store.content.ai = (await api('/api/content')).ai;
+    } catch {
+      /* не критично */
+    }
+    await refreshAIPanel();
+    await refreshModelList();
+  } catch (err) {
+    if (log) log.innerHTML = `<p class="mem-empty">${esc(err.message)}</p>`;
+    toast(err.message, true);
+  }
 }
 
 async function testAI() {
@@ -1376,6 +1464,7 @@ async function saveAIKey() {
     const head = document.querySelector('.scene-head__inner');
     if (head && store.game) head.innerHTML = headerHTML(store.game);
     await refreshAIPanel();
+    await refreshModelList();
   } catch (err) {
     if (log) log.innerHTML = `<p class="mem-empty">${esc(err.message)}</p>`;
     toast(err.message, true);
@@ -1843,6 +1932,10 @@ app.addEventListener('click', async (e) => {
     if (!worlds.length) return;
     const pick = worlds[Math.floor(Math.random() * worlds.length)];
     location.hash = `#/create/${pick.id}`;
+    return;
+  }
+  if (act === 'ai-model-save') {
+    saveAIModel();
     return;
   }
   if (act === 'ai-panel') {
