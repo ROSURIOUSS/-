@@ -198,6 +198,17 @@ test('опыт даётся за выживание: успех больше, к
   assert.equal(fumble.gained, 0);
 });
 
+test('ход без броска даёт немного опыта и не ломает уровни', () => {
+  const g = createGame({ worldId: 'ash', hero: { archetypeId: 'medic' } });
+  const calm = awardExperience(g, null);
+  assert.equal(calm.gained, 1);
+  assert.equal(g.hero.xp, 1);
+  g.hero.xp = 9;
+  const up = awardExperience(g, null);
+  assert.equal(up.leveled, true, 'спокойный ход не поднял уровень на пороге');
+  assert.equal(g.hero.level, 2);
+});
+
 test('новый уровень открывает выбор улучшения ровно один раз', () => {
   const g = createGame({ worldId: 'ash', hero: { archetypeId: 'thief' } });
   g.hero.xp = 9;

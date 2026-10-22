@@ -159,7 +159,19 @@ export function levelChoices(hero) {
  */
 export function awardExperience(state, roll) {
   const hero = state.hero;
-  if (!hero || !roll || state.status === 'dead') return { gained: 0 };
+  if (!hero || state.status === 'dead') return { gained: 0 };
+  // Ход без броска — тоже прожитая сцена: немного опыта за выживание, но без бонусов.
+  if (!roll) {
+    hero.xp = (hero.xp || 0) + 1;
+    let calmLevel = false;
+    while (hero.xp >= XP_PER_LEVEL * (hero.level || 1) && (hero.level || 1) < 12) {
+      hero.xp -= XP_PER_LEVEL * (hero.level || 1);
+      hero.level = (hero.level || 1) + 1;
+      hero.pendingLevel = true;
+      calmLevel = true;
+    }
+    return { gained: 1, leveled: calmLevel };
+  }
   let gained = 1;
   if (roll.success) gained += 1;
   if (roll.critical) gained += 2;
