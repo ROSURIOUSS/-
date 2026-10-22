@@ -1317,7 +1317,13 @@ app.addEventListener('click', async (e) => {
     return;
   }
   if (act === 'reload') {
-    boot();
+    if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+
+boot();
   }
 });
 
@@ -1419,6 +1425,12 @@ function onKey(e) {
   if (e.key === 'h' || e.key === 'р') {
     document.getElementById('sheet')?.classList.toggle('is-open');
   }
+}
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
 }
 
 boot();

@@ -1,0 +1,17 @@
+{
+  "name": "Лория — ИИ-RPG",
+  "short_name": "Лория",
+  "description": "Текстовая RPG с суверенным ИИ-мастером: серверные броски, память мира и настоящие последствия.",
+  "lang": "ru",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0a090b",
+  "theme_color": "#0a090b",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
