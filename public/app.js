@@ -14,7 +14,9 @@ const store = {
   tab: 'facts',
   lastTurn: null,
   rollMemory: null,
-  boostArmed: false
+  boostArmed: false,
+  earlier: [],
+  earlierFrom: null
 };
 
 const STAT_SHORT = { Сила: 'Сила', Ловкость: 'Ловк', Разум: 'Разум', Воля: 'Воля', Харизма: 'Хар' };
@@ -540,6 +542,8 @@ async function createGame() {
     clearTimeout(timer);
     hideOverlay();
     store.game = res.state;
+    store.earlier = [];
+    store.earlierFrom = res.state.logFrom ?? 0;
     localStorage.setItem('loria:last', res.state.id);
     if (res.demo) toast('Модель не ответила — начал резервный рассказчик. Игра продолжится.');
     location.hash = `#/game/${res.state.id}`;
@@ -563,6 +567,8 @@ async function openGame(id) {
   try {
     const data = await api(`/api/games/${id}`);
     store.game = data.state;
+    store.earlier = [];
+    store.earlierFrom = data.state.logFrom ?? 0;
     store.meta = data;
     localStorage.setItem('loria:last', id);
     setAccent(store.game.world.accent);
@@ -648,6 +654,39 @@ function headerHTML(s) {
     </div>`;
 }
 
+// Лента: последние 60 ходов из состояния плюс всё, что игрок догрузил кнопкой.
+function transcriptHTML() {
+  const s = store.game;
+  const log = s.log || [];
+  const firstTurn = log[0]?.turn ?? Number.POSITIVE_INFINITY;
+  const earlier = (store.earlier || []).filter((e) => e.turn < firstTurn);
+  const earlierFrom = store.earlierFrom ?? s.logFrom ?? 0;
+  return `
+    ${earlierFrom > 0 ? `<button class="btn btn--ghost btn--small transcript__more" data-act="earlier">Показать более ранние ходы <b>${earlierFrom}</b></button>` : ''}
+    ${recapHTML(store.meta?.chronicle || [], s)}
+    ${earlier.map((entry, i) => turnHTML(entry, i === 0)).join('')}
+    ${log.map((entry, i) => turnHTML(entry, !earlier.length && i === 0, i === log.length - 1 && log.length > 1)).join('')}`;
+}
+
+async function loadEarlier() {
+  const s = store.game;
+  if (!s || store.busy) return;
+  const before = store.earlierFrom ?? s.logFrom ?? 0;
+  if (before <= 0) return;
+  const transcript = document.getElementById('transcript');
+  const fromBottom = document.documentElement.scrollHeight - window.scrollY;
+  try {
+    const data = await api(`/api/games/${s.id}/turns?before=${before}&limit=30`);
+    const known = new Set((store.earlier || []).map((e) => e.turn));
+    store.earlier = [...(data.turns || []).filter((e) => !known.has(e.turn)), ...(store.earlier || [])];
+    store.earlierFrom = data.from;
+    if (transcript) transcript.innerHTML = transcriptHTML();
+    window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight - fromBottom));
+  } catch (err) {
+    toast(err.message || 'Не удалось загрузить историю', true);
+  }
+}
+
 function renderPlay(data) {
   const s = store.game;
   const log = s.log || [];
@@ -664,8 +703,7 @@ function renderPlay(data) {
 
     <div class="play-grid">
       <section class="transcript" id="transcript" aria-live="polite" aria-label="История">
-        ${recapHTML(data.chronicle || [], s)}
-        ${log.map((entry, i) => turnHTML(entry, i === 0, i === log.length - 1 && log.length > 1)).join('')}
+        ${transcriptHTML()}
       </section>
 
       <aside class="sheet-col" id="sheet">
@@ -680,7 +718,7 @@ function renderPlay(data) {
             dead
               ? `<button class="choice" data-act="death-screen" style="grid-column:1/-1"><b>Финал</b>История завершена. Посмотреть эпитафию.</button>`
               : (last?.options || [])
-                  .map((o, i) => `<button class="choice" data-act="choice" data-i="${i}"><b>Вариант ${i + 1}</b>${esc(o)}</button>`)
+                  .map((o, i) => choiceHTML(o, i))
                   .join('')
           }
         </div>
@@ -695,7 +733,7 @@ function renderPlay(data) {
           <button class="btn btn--primary" data-act="submit-free" ${dead ? 'disabled' : ''}><span>Действовать</span>↵</button>
         </div>
         <div class="composer__hint">
-          <span class="keys-hint">1–3 — варианты · H — лист героя</span>
+          <span class="keys-hint">1–4 — варианты · ↑ — прошлые действия · H — лист героя</span>
           ${store.boostArmed ? '<b style="color:var(--accent)">Рывок заряжен:</b> при провале сервер перебросит кубик и возьмёт лучший результат.' : 'Бросок делает сервер. Мастер не может его отменить.'}
           ${store.content.ai.available ? (store.content.ai.lastFailure ? ' Модель не ответила — сцены пишет резерв.' : '') : ' Резервный режим.'}
         </div>
@@ -703,11 +741,22 @@ function renderPlay(data) {
     </footer>
   </div>`;
 
-  document.getElementById('free-action')?.addEventListener('keydown', (e) => {
+  const freeInput = document.getElementById('free-action');
+  freeInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submitFree();
+      return;
     }
+    if (e.key === 'ArrowUp' && e.target.selectionStart === 0 && e.target.selectionEnd === 0) {
+      if (recallHistory(e.target, -1)) e.preventDefault();
+    }
+    if (e.key === 'ArrowDown' && store.histIndex != null && e.target.selectionStart === e.target.value.length) {
+      if (recallHistory(e.target, 1)) e.preventDefault();
+    }
+  });
+  freeInput?.addEventListener('input', () => {
+    store.histIndex = null;
   });
   if (dead) setTimeout(() => showDeathOverlay(), 700);
 }
@@ -724,7 +773,6 @@ function sheetHTML() {
 
   const facts = mem.facts.slice(-40).reverse();
   const npcs = [...mem.npcs].sort((a, b) => (b.lastTurn || 0) - (a.lastTurn || 0));
-  const quests = [...mem.quests].reverse();
 
   return `
     <div class="sheet-head">
@@ -801,7 +849,9 @@ function sheetHTML() {
       <div class="tabs">
         <button class="tab ${tab === 'facts' ? 'is-active' : ''}" data-act="tab" data-tab="facts">Память</button>
         <button class="tab ${tab === 'npcs' ? 'is-active' : ''}" data-act="tab" data-tab="npcs">NPC</button>
-        <button class="tab ${tab === 'quests' ? 'is-active' : ''}" data-act="tab" data-tab="quests">Задания</button>
+        <button class="tab ${tab === 'quests' ? 'is-active' : ''}" data-act="tab" data-tab="quests">Задания${
+          mem.quests.some((q) => q.status === 'active') ? ` <b class="tab__count">${mem.quests.filter((q) => q.status === 'active').length}</b>` : ''
+        }</button>
         <button class="tab ${tab === 'audit' ? 'is-active' : ''}" data-act="tab" data-tab="audit">Аудит</button>
       </div>
 
@@ -829,13 +879,21 @@ function sheetHTML() {
       }
       ${
         tab === 'quests'
-          ? `<div class="mem-list">${quests
-              .map(
-                (q) => `<div class="mem-item ${q.status === 'active' ? 'pinned' : ''}">
+          ? (() => {
+              const order = { active: 0, done: 1, failed: 2 };
+              const list = [...mem.quests].sort(
+                (a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3) || (b.updatedAt || 0) - (a.updatedAt || 0)
+              );
+              const activeCount = list.filter((q) => q.status === 'active').length;
+              return `<div class="mem-summary">Активных: <b>${activeCount}</b> · всего: <b>${list.length}</b></div>
+                <div class="mem-list">${list
+                .map(
+                  (q) => `<div class="mem-item ${q.status === 'active' ? 'pinned' : ''}">
                   <span class="meta">${q.status === 'active' ? 'активно' : q.status === 'done' ? 'завершено' : 'провалено'} · ход ${q.openedAt}</span>
                   ${esc(q.title)}${q.note ? `<br><span style="color:var(--muted)">${esc(q.note)}</span>` : ''}</div>`
-              )
-              .join('') || '<div class="mem-empty">Журнал пуст. Пока.</div>'}</div>`
+                )
+                .join('') || '<div class="mem-empty">Журнал пуст. Пока.</div>'}</div>`;
+            })()
           : ''
       }
       ${
@@ -909,6 +967,41 @@ function setComposerBusy(busy) {
   if (btn) btn.disabled = busy;
 }
 
+const histKey = () => `loria:hist:${store.game?.id || 'new'}`;
+
+function readHistory() {
+  try {
+    const list = JSON.parse(localStorage.getItem(histKey()) || '[]');
+    return Array.isArray(list) ? list.filter((x) => typeof x === 'string').slice(0, 25) : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushHistory(text) {
+  const clean = String(text || '').trim();
+  if (!clean) return;
+  const list = readHistory().filter((x) => x !== clean);
+  list.unshift(clean.slice(0, 500));
+  try {
+    localStorage.setItem(histKey(), JSON.stringify(list.slice(0, 25)));
+  } catch {
+    /* приватный режим */
+  }
+  store.histIndex = null;
+}
+
+function recallHistory(input, dir) {
+  const list = readHistory();
+  if (!list.length) return false;
+  const next = store.histIndex == null ? (dir < 0 ? 0 : null) : Math.max(-1, Math.min(list.length - 1, store.histIndex - dir));
+  if (next === null) return false;
+  store.histIndex = next < 0 ? null : next;
+  input.value = store.histIndex == null ? '' : list[store.histIndex];
+  input.setSelectionRange(input.value.length, input.value.length);
+  return true;
+}
+
 async function submitAction(action) {
   if (store.busy || !action || !store.game) return;
   if (store.game.status === 'dead') return;
@@ -979,12 +1072,20 @@ async function submitAction(action) {
 function finishTurn(payload) {
   document.getElementById('typing-indicator')?.remove();
   store.boostArmed = false;
+  const prevLog = store.game?.log || [];
   store.game = payload.state;
+  // Если окно истории сдвинулось, выпавшие ходы не теряем — они ушли в «ранние».
+  const known = new Set([...(store.earlier || []), ...(payload.state.log || [])].map((e) => e.turn));
+  const dropped = prevLog.filter((e) => !known.has(e.turn));
+  if (dropped.length) store.earlier = [...dropped, ...(store.earlier || [])];
+  store.earlierFrom = payload.state.logFrom ?? store.earlierFrom;
   store.meta = { ...(store.meta || {}), memoryIndex: payload.memoryIndex };
 
   const transcript = document.getElementById('transcript');
   if (transcript && payload.turn) {
     transcript.insertAdjacentHTML('beforeend', turnHTML(payload.turn, false, true));
+    const more = transcript.querySelector('.transcript__more b');
+    if (more && store.earlierFrom) more.textContent = String(store.earlierFrom);
   }
   const head = document.querySelector('.scene-head__inner');
   if (head) head.innerHTML = headerHTML(store.game);
@@ -1003,6 +1104,10 @@ function finishTurn(payload) {
   scrollToBottom();
 }
 
+function choiceHTML(o, i) {
+  return `<button class="choice" data-act="choice" data-i="${i}"><b>Вариант ${i + 1}</b>${esc(o)}<i class="choice__key" aria-hidden="true">${i + 1}</i></button>`;
+}
+
 function renderChoices(s) {
   const choices = document.getElementById('choices');
   if (!choices) return;
@@ -1012,7 +1117,7 @@ function renderChoices(s) {
     return;
   }
   choices.innerHTML = (last?.options || [])
-    .map((o, i) => `<button class="choice" data-act="choice" data-i="${i}"><b>Вариант ${i + 1}</b>${esc(o)}</button>`)
+    .map((o, i) => choiceHTML(o, i))
     .join('');
 }
 
@@ -1022,6 +1127,7 @@ function submitFree() {
   const value = input.value.trim();
   if (!value) return toast('Опиши действие', true);
   input.value = '';
+  pushHistory(value);
   submitAction(value);
 }
 
@@ -1269,6 +1375,10 @@ app.addEventListener('click', async (e) => {
   }
   if (act === 'open') {
     location.hash = `#/game/${el.dataset.id}`;
+    return;
+  }
+  if (act === 'earlier') {
+    await loadEarlier();
     return;
   }
   if (act === 'pick-world') {
@@ -1595,7 +1705,7 @@ async function runAuditor() {
 function onKey(e) {
   if (store.view !== 'game' || store.busy) return;
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-  if (['1', '2', '3'].includes(e.key)) {
+  if (['1', '2', '3', '4', '5', '6'].includes(e.key)) {
     const btn = app.querySelector(`.choice[data-i="${Number(e.key) - 1}"]`);
     if (btn) btn.click();
   }

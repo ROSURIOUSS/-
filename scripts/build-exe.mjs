@@ -223,11 +223,22 @@ function inject(baseFile, blobPath, outFile) {
     { stdio: 'inherit' }
   );
   const data = fs.readFileSync(outFile);
-  const blobSize = fs.statSync(blobPath).size;
-  if (!data.includes(Buffer.from('public.json')) || data.length < blobSize) {
-    throw new Error('Blob не попал в файл — инъекция не удалась');
+  const blob = fs.readFileSync(blobPath);
+  // На Windows blob живёт ресурсом NODE_SEA_BLOB (имя в таблице — UTF-16),
+  // на Linux — заметкой ELF (имя ASCII).
+  const named = data.includes(Buffer.from('NODE_SEA_BLOB', 'utf16le')) || data.includes(Buffer.from('NODE_SEA_BLOB'));
+  const embedded = data.indexOf(blob) !== -1;
+  if (!named || !embedded) {
+    throw new Error('Blob не попал в файл — инъекция не удалась (проверь postject и версию Node)');
   }
+  const sha = crypto.createHash('sha256').update(data).digest('hex');
   log(`  файл: ${outFile} (${human(data.length)})`);
+  log(`  sha256: ${sha}`);
+  try {
+    fs.writeFileSync(`${outFile}.sha256`, `${sha}  ${path.basename(outFile)}\n`);
+  } catch {
+    /* не критично */
+  }
   return outFile;
 }
 

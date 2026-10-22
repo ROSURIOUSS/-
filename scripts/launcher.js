@@ -73,11 +73,103 @@ function ensureDir(dir) {
   return dir;
 }
 
+// ---------- память окна и единственный экземпляр ----------
+
+function readWindowPrefs() {
+  const fallback = { width: 1280, height: 860, x: null, y: null, maximized: false };
+  try {
+    const raw = JSON.parse(fs.readFileSync(windowFile, 'utf8'));
+    const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null);
+    const width = num(raw.width);
+    const height = num(raw.height);
+    const x = num(raw.x);
+    const y = num(raw.y);
+    return {
+      width: width && width >= 900 && width <= 5120 ? width : fallback.width,
+      height: height && height >= 600 && height <= 2880 ? height : fallback.height,
+      x: x !== null && Math.abs(x) < 20000 ? x : null,
+      y: y !== null && Math.abs(y) < 20000 ? y : null,
+      maximized: raw.maximized === true
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveWindowPrefs(win, previous) {
+  try {
+    const maximized = typeof win.isMaximized === 'function' ? Boolean(win.isMaximized()) : false;
+    let { width, height, x, y } = previous;
+    if (!maximized) {
+      const size = win.getOuterSize(false);
+      const pos = win.getPosition(false);
+      if (size && size.width >= 900) width = Math.round(size.width);
+      if (size && size.height >= 600) height = Math.round(size.height);
+      if (pos && Number.isFinite(pos.x)) x = Math.round(pos.x);
+      if (pos && Number.isFinite(pos.y)) y = Math.round(pos.y);
+    }
+    fs.writeFileSync(windowFile, JSON.stringify({ width, height, x, y, maximized }));
+  } catch {
+    /* память окна — не критично */
+  }
+}
+
+function readRuntime() {
+  try {
+    return JSON.parse(fs.readFileSync(runtimeFile, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function loriaAt(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(900) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && data.ok && data.worlds ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function findRunning() {
+  const runtime = readRuntime();
+  if (!runtime || !runtime.port) return null;
+  if (runtime.pid && !pidAlive(runtime.pid)) return null;
+  const health = await loriaAt(runtime.port);
+  return health ? { port: runtime.port, url: `http://127.0.0.1:${runtime.port}` } : null;
+}
+
+async function focusRunning(url) {
+  try {
+    const res = await fetch(`${url}/api/focus`, { method: 'POST', signal: AbortSignal.timeout(1500) });
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data.ok === true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------- где живут сохранения ----------
 
 const portable = IS_SEA && canWrite(exeDir);
 const HOME = path.resolve(process.env.LORIA_HOME || (IS_SEA ? (portable ? exeDir : storeRoot) : exeDir));
 const dataDir = path.resolve(process.env.LORIA_DATA_DIR || path.join(HOME, 'data'));
+// Собранное приложение хранит память окна рядом с сохранениями, а запуск из репозитория — в data/.
+const stateDir = IS_SEA ? HOME : dataDir;
+const windowFile = path.join(stateDir, 'window.json');
+const runtimeFile = path.join(stateDir, 'runtime.json');
 
 // .env читаем сначала рядом с exe (и на уровень выше — удобно при сборке из репозитория),
 // потом в домашней папке. Уже заданные переменные не перетираются.
@@ -248,26 +340,95 @@ function findChromium() {
   return null;
 }
 
+// Иконка окна: та же, что у .exe и у веб-версии.
+function loadWindowIcon() {
+  const dir = process.env.LORIA_PUBLIC_DIR || path.join(exeDir, 'public');
+  try {
+    return { data: fs.readFileSync(path.join(dir, 'icon-192.png')), width: 192, height: 192 };
+  } catch {
+    return null;
+  }
+}
+
+// Есть ли на машине движок WebView2 (он ставится с Edge и Windows 11 «из коробки»).
+function hasWebView2() {
+  if (process.platform !== 'win32') return false;
+  const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
+  for (const root of roots) {
+    const dir = path.join(root, 'Microsoft', 'EdgeWebView', 'Application');
+    try {
+      const versions = fs.readdirSync(dir);
+      if (versions.some((v) => fs.existsSync(path.join(dir, v, 'msedgewebview2.exe')))) return true;
+    } catch {
+      /* нет такой папки */
+    }
+  }
+  return false;
+}
+
 // Своё окно: WebView2 внутри процесса, без браузерной обвязки.
 async function openNativeWindow(url) {
   if (FORCE_WEB) return false;
   if (IS_SEA && process.platform !== 'win32') return false;
+  if (process.platform === 'win32') {
+    // Профиль движка — рядом с сохранениями: папка с .exe может быть только для чтения.
+    process.env.WEBVIEW2_USER_DATA_FOLDER = process.env.WEBVIEW2_USER_DATA_FOLDER || path.join(HOME, 'webview2');
+    if (!hasWebView2()) {
+      line('  WebView2 не найден — окно приложения недоступно. Ставится вместе с Edge: https://developer.microsoft.com/microsoft-edge/webview2/');
+      return false;
+    }
+  }
   const addon = process.env.LORIA_WEBVIEW_MODULE || (IS_SEA ? path.join(process.env.LORIA_PUBLIC_DIR || '', 'webview.node') : '');
   if (IS_SEA) {
-    if (!addon || !fs.existsSync(addon)) return false;
+    if (!addon || !fs.existsSync(addon)) {
+      line('  В файле нет нативного окна (webview.node) — открываю запасное окно.');
+      return false;
+    }
     process.env.NAPI_RS_NATIVE_LIBRARY_PATH = addon;
   }
 
+  const prefs = readWindowPrefs();
   const { Application } = await import('@webviewjs/webview');
   const app = new Application();
-  const win = app.createBrowserWindow({ title: 'Лория', width: 1280, height: 860, resizable: true });
+  const options = {
+    title: 'Лория',
+    width: prefs.width,
+    height: prefs.height,
+    resizable: true,
+    maximized: prefs.maximized
+  };
+  if (prefs.x !== null && prefs.y !== null) {
+    options.x = prefs.x;
+    options.y = prefs.y;
+  }
+  const icon = loadWindowIcon();
+  if (icon && process.platform === 'win32') options.windowsTaskbarIcon = icon;
+  const win = app.createBrowserWindow(options);
   try {
     win.setMinSize(980, 640);
   } catch {
     /* не критично */
   }
   win.createWebview({ url });
+  globalThis.__loriaFocus = () => {
+    try {
+      win.show();
+      win.focus();
+    } catch {
+      /* окно уже закрыто */
+    }
+  };
+  app.on('window-close-requested', () => {
+    saveWindowPrefs(win, prefs);
+    try {
+      app.exit();
+    } catch {
+      /* уже закрыто */
+    }
+    stopApp(0);
+  });
   app.on('application-close-requested', () => {
+    saveWindowPrefs(win, prefs);
     try {
       app.exit();
     } catch {
@@ -285,7 +446,18 @@ function openAppBrowser(url) {
   const exe = findChromium();
   if (!exe) return false;
   try {
-    const child = spawn(exe, [`--app=${url}`, '--window-size=1280,860', '--no-first-run'], {
+    const profile = path.join(HOME, 'window-profile');
+    const child = spawn(
+      exe,
+      [
+        `--app=${url}`,
+        '--window-size=1280,860',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-features=Translate',
+        `--user-data-dir=${profile}`
+      ],
+      {
       detached: true,
       stdio: 'ignore',
       windowsHide: true
@@ -307,7 +479,9 @@ function openBrowser(url) {
     else child = spawn('xdg-open', [url], options);
     child.on('error', () => {});
     child.unref();
+    return true;
   } catch {
+    return false;
     /* браузер не нашёлся — адрес напечатан выше */
   }
 }
@@ -355,6 +529,20 @@ async function main() {
   ensureDir(path.join(dataDir, 'games'));
   writeEnvExample();
 
+  // Второй запуск не поднимает второй сервер: показываем уже открытое окно.
+  if (!cliArgs.has('--new')) {
+    const running = await findRunning();
+    if (running) {
+      line('');
+      line(`  Лория уже запущена — открываю её окно: ${running.url}`);
+      const focused = await focusRunning(running.url);
+      if (!focused && !NO_OPEN) {
+        if (!openAppBrowser(running.url)) openBrowser(running.url);
+      }
+      return;
+    }
+  }
+
   const publicDir = extractAssets();
   if (publicDir) process.env.LORIA_PUBLIC_DIR = publicDir;
 
@@ -380,6 +568,13 @@ async function main() {
   const app = await import('../server/index.js');
   const url = `http://127.0.0.1:${port}`;
   const alive = await waitForServer(url);
+  if (alive) {
+    try {
+      fs.writeFileSync(runtimeFile, JSON.stringify({ port, pid: process.pid, startedAt: Date.now() }));
+    } catch {
+      /* не критично */
+    }
+  }
 
   let stopping = false;
   const stop = async (code = 0) => {
@@ -397,6 +592,12 @@ async function main() {
     } catch {
       /* уже закрыт */
     }
+    try {
+      const runtime = readRuntime();
+      if (runtime && runtime.pid === process.pid) fs.unlinkSync(runtimeFile);
+    } catch {
+      /* файла уже нет */
+    }
     await sleep(150);
     process.exit(code);
   };
@@ -410,9 +611,21 @@ async function main() {
       } catch (err) {
         line(`  Окно приложения не открылось (${err?.message || err}) — пробую Edge.`);
       }
-      if (!opened && !FORCE_WEB) opened = openAppBrowser(url);
-      if (!opened) openBrowser(url);
-      line(opened ? '  Окно открыто.' : '  Открой адрес вручную.');
+      let how = opened ? 'WebView2' : '';
+      if (!opened && !FORCE_WEB) {
+        if (openAppBrowser(url)) how = 'Edge/Chrome, окно приложения';
+      }
+      if (!how) {
+        // Последний вариант — обычная вкладка. Только если ничего другого нет.
+        if (openBrowser(url)) how = 'браузер';
+      }
+      if (!nativeApp) {
+        globalThis.__loriaFocus = () => {
+          if (!openAppBrowser(url)) openBrowser(url);
+        };
+      }
+      line(how ? `  Окно: ${how}.` : '  Открой адрес вручную.');
+      if (!how && HIDDEN) showFatal(`Не удалось открыть окно.\nОткрой вручную: ${url}\nЛог: ${logFile}`);
     }
   } else {
     line('  Сервер не ответил. Открой адрес вручную, если он всё-таки поднялся.');

@@ -439,10 +439,15 @@ export function heroSummary(hero) {
 /** Публичное представление состояния для клиента. */
 export function publicState(state) {
   const { log, audit, snapshots, ...rest } = state;
+  const full = Array.isArray(log) ? log : [];
+  const from = Math.max(0, full.length - 60);
   return {
     ...rest,
     rewinds: Array.isArray(snapshots) ? snapshots.length : 0,
-    log: (log || []).slice(-60),
+    // В браузер уходят последние 60 ходов, но старые можно догрузить по /turns.
+    log: full.slice(-60),
+    logTotal: full.length,
+    logFrom: from,
     audit: (audit || []).slice(-40)
   };
 }

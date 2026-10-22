@@ -129,6 +129,20 @@ async function handleApi(req, res, url) {
     });
   }
 
+  // Фокус уже открытого окна: лаунчер подменяет обработчик на живое окно.
+  if (req.method === 'POST' && url.pathname === '/api/focus') {
+    const handler = globalThis.__loriaFocus;
+    if (typeof handler === 'function') {
+      try {
+        await handler();
+        return json(res, 200, { ok: true });
+      } catch {
+        /* окно уже закрыто */
+      }
+    }
+    return json(res, 200, { ok: false });
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/content') {
     return json(res, 200, {
       worlds: PRESETS.map((w) => ({
@@ -215,6 +229,24 @@ async function handleApi(req, res, url) {
       memoryIndex: memoryIndexSize(state),
       chronicle: chronicle(state),
       usage: state.usage || null
+    });
+  }
+
+  // Постраничная история: интерфейс показывает последние 60 ходов,
+  // старые догружаются порциями, чтобы длинные партии не теряли начало.
+  if (req.method === 'GET' && tail === 'turns') {
+    const log = Array.isArray(state.log) ? state.log : [];
+    const beforeRaw = Number(url.searchParams.get('before'));
+    const limitRaw = Number(url.searchParams.get('limit'));
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(60, Math.floor(limitRaw))) : 30;
+    const before = Number.isFinite(beforeRaw) && beforeRaw > 0 ? Math.min(log.length, Math.floor(beforeRaw)) : log.length;
+    const from = Math.max(0, before - limit);
+    return json(res, 200, {
+      turns: log.slice(from, before),
+      from,
+      before,
+      total: log.length,
+      hasMore: from > 0
     });
   }
 

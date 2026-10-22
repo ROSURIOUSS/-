@@ -218,6 +218,26 @@ await test('отмена хода возвращает состояние и н�
   assert.ok([200, 400].includes(again.status));
 });
 
+await test('старые ходы догружаются постранично', async () => {
+  const state = (await api('GET', `/api/games/${gameId}`)).data.state;
+  assert.equal(state.logTotal, state.log.length >= 60 ? state.logTotal : state.log.length, 'счётчик ходов разошёлся');
+  assert.ok(state.logFrom >= 0);
+
+  const total = state.logTotal;
+  const page = await api('GET', `/api/games/${gameId}/turns?before=${total}&limit=1`);
+  assert.equal(page.status, 200);
+  assert.equal(page.data.turns.length, 1, 'не отдалась страница истории');
+  assert.equal(page.data.turns[0].turn, state.log[state.log.length - 1].turn, 'не тот ход');
+  assert.equal(page.data.from, total - 1);
+  assert.equal(page.data.hasMore, total > 1);
+
+  const clamped = await api('GET', `/api/games/${gameId}/turns?limit=500`);
+  assert.ok(clamped.data.turns.length <= 60, 'лимит страницы не ограничен');
+
+  const latest = await api('GET', `/api/games/${gameId}/turns?limit=1`);
+  assert.equal(latest.data.turns[0].turn, state.log[state.log.length - 1].turn, 'по умолчанию нужна последняя страница');
+});
+
 await test('сохранение скачивается и импортируется как новая история', async () => {
   const res = await fetch(`${BASE}/api/games/${gameId}/download`);
   assert.equal(res.status, 200);
