@@ -18,7 +18,12 @@ import { loadEnv } from '../server/env.js';
 
 // createRequire нужен только ради встроенного node:sea — путь-заглушка подходит.
 const requireHere = createRequire(path.join(process.cwd(), 'loria-launcher.js'));
-const sea = requireHere('node:sea');
+let sea = null;
+try {
+  sea = requireHere('node:sea'); // есть только в Node 20.6+
+} catch {
+  /* старый Node — просто работаем как обычный сервер */
+}
 const IS_SEA = Boolean(sea && typeof sea.isSea === 'function' && sea.isSea());
 
 const cliArgs = new Set(process.argv.slice(IS_SEA ? 1 : 2));
