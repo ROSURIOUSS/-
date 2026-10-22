@@ -1,7 +1,9 @@
 // Клиент OpenRouter: аккуратные повторы, перебор запасных моделей,
 // жёсткий таймаут и устойчивый разбор JSON.
 
-const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+function baseUrl() {
+  return (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
+}
 
 const FREE_FALLBACKS = [
   'deepseek/deepseek-chat-v3-0324:free',
@@ -97,7 +99,7 @@ async function callModel({ model, system, user, temperature = 0.95, maxTokens = 
   const { key } = aiConfig();
   if (!key) throw new AIError('Ключ OpenRouter не задан', { status: 0 });
 
-  const res = await fetch(ENDPOINT, {
+  const res = await fetch(`${baseUrl()}/chat/completions`, {
     method: 'POST',
     signal,
     headers: {
@@ -191,7 +193,7 @@ async function catalog() {
   const { key } = aiConfig();
   if (!key) return [];
   try {
-    const res = await fetch('https://openrouter.ai/api/v1/models', {
+    const res = await fetch(`${baseUrl()}/models`, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(6000)
     });
