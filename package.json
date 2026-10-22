@@ -1,0 +1,15 @@
+{
+  "name": "loria-web",
+  "version": "1.0.0",
+  "description": "Лория — хардкорная ИИ-RPG с суверенным Гейм-Мастером, аудитором состояния и памятью мира",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "doctor": "node scripts/doctor.js"
+  }
+}
