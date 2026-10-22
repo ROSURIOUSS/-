@@ -254,6 +254,7 @@ export function commitPlan(state, plan, { action, roll, demo }) {
 }
 
 export async function runTurn(state, action, onPhase = () => {}, { audit = false, boost = false } = {}) {
+  pushSnapshot(state);
   const roll = serverRoll(state, action, undefined, { boost });
   onPhase('check', { roll });
 
@@ -330,6 +331,54 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
   await saveGame(state);
   turnsServed += 1;
   return { state, turn: turnEntry, demo, aiError };
+}
+
+const MAX_SNAPSHOTS = 2;
+
+/** Снимок состояния до хода — для отмены. Храним только то, что меняет ход. */
+export function pushSnapshot(state) {
+  const snap = {
+    at: Date.now(),
+    turn: state.scene.turn,
+    hero: structuredClone(state.hero),
+    scene: structuredClone(state.scene),
+    flags: structuredClone(state.flags),
+    stats: structuredClone(state.stats),
+    memory: structuredClone(state.memory),
+    logLength: (state.log || []).length,
+    auditLength: (state.audit || []).length
+  };
+  state.snapshots = [snap, ...(state.snapshots || [])].slice(0, MAX_SNAPSHOTS);
+}
+
+/** Отмена последнего хода. После смерти отмены нет — только ветка. */
+export async function rewind(state) {
+  const snapshot = (state.snapshots || [])[0];
+  if (!snapshot) throw new AIError('Отменять пока нечего: это был первый ход.', { status: 400 });
+  if (state.status === 'dead') {
+    throw new AIError('После смерти ход не отменяется. Возьми ветку — она вернёт героя с полпути.', { status: 400 });
+  }
+
+  const undoneTurn = state.scene.turn;
+  state.hero = snapshot.hero;
+  state.scene = snapshot.scene;
+  state.flags = snapshot.flags;
+  state.stats = snapshot.stats;
+  state.memory = snapshot.memory;
+  state.log = (state.log || []).slice(0, snapshot.logLength);
+  state.audit = (state.audit || []).slice(0, snapshot.auditLength);
+  state.snapshots = (state.snapshots || []).slice(1);
+  state.status = 'active';
+  state.updatedAt = Date.now();
+  state.audit.push({
+    turn: state.scene.turn,
+    at: Date.now(),
+    kind: 'rewind',
+    severity: 'soft',
+    message: `Ход ${undoneTurn} отменён: состояние вернулось к началу сцены. Отмен осталось: ${state.snapshots.length}.`
+  });
+  await saveGame(state);
+  return { state, undoneTurn, remaining: state.snapshots.length };
 }
 
 /** Новая игра: герой, мир, открывающая сцена. */

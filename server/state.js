@@ -342,9 +342,10 @@ export function heroSummary(hero) {
 
 /** Публичное представление состояния для клиента. */
 export function publicState(state) {
-  const { log, audit, ...rest } = state;
+  const { log, audit, snapshots, ...rest } = state;
   return {
     ...rest,
+    rewinds: Array.isArray(snapshots) ? snapshots.length : 0,
     log: (log || []).slice(-60),
     audit: (audit || []).slice(-40)
   };

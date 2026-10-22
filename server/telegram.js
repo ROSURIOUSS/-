@@ -138,7 +138,7 @@ function worldsKeyboard() {
   return rows;
 }
 
-const WORLD_ICONS = { ash: '🔥', neon: '🌆', space: '🛰', noir: '🌧' };
+const WORLD_ICONS = { ash: '🔥', neon: '🌆', space: '🛰', noir: '🌧', forest: '🌲', waste: '🏜' };
 
 function archetypesKeyboard(worldId) {
   const rows = [];

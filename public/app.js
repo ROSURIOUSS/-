@@ -588,9 +588,9 @@ function checkCard(check) {
   </div>`;
 }
 
-function turnHTML(entry, isFirst) {
+function turnHTML(entry, isFirst, isNew = false) {
   const limits = Array.isArray(entry.limits) ? entry.limits : [];
-  return `<article class="turn" data-turn="${entry.turn}">
+  return `<article class="turn" data-turn="${entry.turn}" ${isNew ? 'data-new="1"' : ''}>
     <div class="turn__action"><b>Ход ${entry.turn}</b><span>${esc(entry.action)}</span></div>
     ${entry.check ? checkCard(entry.check) : ''}
     <div class="narration">${nl2p(entry.narration)}</div>
@@ -655,7 +655,7 @@ function renderPlay(data) {
     <div class="play-grid">
       <section class="transcript" id="transcript">
         ${recapHTML(data.chronicle || [], s)}
-        ${log.map((entry, i) => turnHTML(entry, i === 0)).join('')}
+        ${log.map((entry, i) => turnHTML(entry, i === 0, i === log.length - 1 && log.length > 1)).join('')}
       </section>
 
       <aside class="sheet-col" id="sheet">
@@ -679,6 +679,9 @@ function renderPlay(data) {
           ${dead ? '' : `<button class="btn btn--boost ${hero.boosts > 0 ? '' : 'is-spent'}" data-act="toggle-boost" title="Второй бросок за ход, берётся лучший">
             <span>Рывок</span><b>${hero.boosts}/${hero.maxBoosts || 1}</b>
           </button>`}
+          ${!dead && s.rewinds > 0 ? `<button class="btn btn--ghost btn--undo" data-act="rewind" title="Отменить последний ход и вернуться к началу сцены">
+            <span>Отменить</span><b>${s.rewinds}</b>
+          </button>` : ''}
           <button class="btn btn--primary" data-act="submit-free" ${dead ? 'disabled' : ''}><span>Действовать</span>↵</button>
         </div>
         <div class="composer__hint">
@@ -828,7 +831,18 @@ function sheetHTML() {
       <div class="kv"><span>Успехов / провалов</span><b>${s.stats.successes} / ${s.stats.failures}</b></div>
       <div class="kv"><span>Криты / провалы</span><b>${s.stats.crits} / ${s.stats.fumbles}</b></div>
       <div class="kv"><span>Отметок аудитора</span><b>${(s.audit || []).length}</b></div>
+      <div class="kv"><span>Отмен в запасе</span><b>${s.rewinds || 0}</b></div>
       ${s.usage ? `<div class="kv"><span>Запросов к модели сегодня</span><b>${s.usage.requests}</b></div>` : ''}
+      ${
+        s.usage
+          ? `<div class="kv"><span>Токены (вход / выход)</span><b>${Math.round((s.usage.promptTokens || 0) / 100) / 10}k / ${Math.round(
+              (s.usage.completionTokens || 0) / 100
+            ) / 10}k</b></div>`
+          : ''
+      }
+      <div style="display:flex;gap:6px;margin-top:10px">
+        <a class="btn btn--ghost btn--small" style="flex:1" href="/api/games/${esc(s.id)}/download">Скачать сохранение</a>
+      </div>
     </div>
   `;
 }
@@ -944,10 +958,11 @@ function finishTurn(payload) {
 
   const transcript = document.getElementById('transcript');
   if (transcript && payload.turn) {
-    transcript.insertAdjacentHTML('beforeend', turnHTML(payload.turn));
+    transcript.insertAdjacentHTML('beforeend', turnHTML(payload.turn, false, true));
   }
   const head = document.querySelector('.scene-head__inner');
   if (head) head.innerHTML = headerHTML(store.game);
+  syncActionButtons();
   updateSheet();
   renderChoices(payload.state);
   if (payload.demo) toast('Модель не ответила — сцену дописал резервный рассказчик.');
@@ -1175,8 +1190,12 @@ function renderArchive() {
         <h1>Архив</h1>
         <p>Каждая история хранится локально на сервере. Можно продолжить или забрать хронику в Markdown.</p>
       </div>
-      <button class="btn btn--primary" data-act="nav" data-to="/worlds">Новая история</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn--ghost" data-act="import">Загрузить файл</button>
+        <button class="btn btn--primary" data-act="nav" data-to="/worlds">Новая история</button>
+      </div>
     </div>
+    <input type="file" id="import-file" accept="application/json,.json" hidden />
     <div class="archive-list">
       ${
         store.games.length
@@ -1192,6 +1211,7 @@ function renderArchive() {
                     <button class="btn btn--small" data-act="open" data-id="${esc(g.id)}">${g.status === 'dead' ? 'Открыть' : 'Продолжить'}</button>
                     ${g.status === 'dead' ? `<button class="btn btn--ghost btn--small" data-act="fork" data-id="${esc(g.id)}">Ветка</button>` : ''}
                     <a class="btn btn--ghost btn--small" href="/api/games/${esc(g.id)}/export">.md</a>
+                    <a class="btn btn--ghost btn--small" href="/api/games/${esc(g.id)}/download" title="Скачать сохранение">json</a>
                     <button class="btn btn--ghost btn--small btn--danger" data-act="delete" data-id="${esc(g.id)}">×</button>
                   </div>
                 </div>`
@@ -1201,6 +1221,12 @@ function renderArchive() {
       }
     </div>
   </div>`;
+
+  const fileInput = document.getElementById('import-file');
+  fileInput?.addEventListener('change', (e) => {
+    importSave(e.target.files?.[0]);
+    e.target.value = '';
+  });
 }
 
 // ---------- события ----------
@@ -1297,6 +1323,14 @@ app.addEventListener('click', async (e) => {
     await takeRest();
     return;
   }
+  if (act === 'rewind') {
+    await rewindTurn();
+    return;
+  }
+  if (act === 'import') {
+    document.getElementById('import-file')?.click();
+    return;
+  }
   if (act === 'death-screen') {
     showDeathOverlay();
     return;
@@ -1339,6 +1373,41 @@ overlayRoot.addEventListener('click', (e) => {
   }
 });
 
+/** Досоздаёт/убирает кнопки рывка и отмены после хода, не трогая поле ввода. */
+function syncActionButtons() {
+  const g = store.game;
+  const form = document.querySelector('.free-form');
+  if (!g || !form || g.status === 'dead') return;
+  const hero = g.hero;
+
+  let boost = form.querySelector('[data-act="toggle-boost"]');
+  if (!boost) {
+    boost = document.createElement('button');
+    boost.className = 'btn btn--boost';
+    boost.dataset.act = 'toggle-boost';
+    boost.title = 'Второй бросок за ход, берётся лучший';
+    boost.innerHTML = '<span>Рывок</span><b></b>';
+    form.insertBefore(boost, form.querySelector('[data-act="submit-free"]'));
+  }
+  boost.classList.toggle('is-spent', hero.boosts <= 0);
+  boost.querySelector('b').textContent = `${hero.boosts}/${hero.maxBoosts || 1}`;
+
+  let undo = form.querySelector('[data-act="rewind"]');
+  if ((g.rewinds || 0) > 0) {
+    if (!undo) {
+      undo = document.createElement('button');
+      undo.className = 'btn btn--ghost btn--undo';
+      undo.dataset.act = 'rewind';
+      undo.title = 'Отменить последний ход и вернуться к началу сцены';
+      undo.innerHTML = '<span>Отменить</span><b></b>';
+      form.insertBefore(undo, form.querySelector('[data-act="submit-free"]'));
+    }
+    undo.querySelector('b').textContent = g.rewinds;
+  } else if (undo) {
+    undo.remove();
+  }
+}
+
 function rerenderComposer() {
   const composer = document.getElementById('composer');
   if (!composer || !store.game) return;
@@ -1361,6 +1430,21 @@ function rerenderComposer() {
   }
 }
 
+async function rewindTurn() {
+  if (!store.game || store.busy) return;
+  if (!confirm('Отменить последний ход? Сцена исчезнет, состояние вернётся к её началу.')) return;
+  setComposerBusy(true);
+  try {
+    const res = await api(`/api/games/${store.game.id}/rewind`, { method: 'POST', body: '{}' });
+    toast(`Ход ${res.undoneTurn} отменён. Отмен осталось: ${res.remaining}.`);
+    await openGame(res.state.id);
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    setComposerBusy(false);
+  }
+}
+
 async function takeRest() {
   if (!store.game || store.busy) return;
   setComposerBusy(true);
@@ -1368,6 +1452,7 @@ async function takeRest() {
     const res = await api(`/api/games/${store.game.id}/rest`, { method: 'POST', body: '{}' });
     store.game = res.state;
     updateSheet();
+    syncActionButtons();
     rerenderComposer();
     toast('Передышка: силы частично вернулись, рывок восстановлен.');
   } catch (err) {
@@ -1387,6 +1472,20 @@ async function compactMemory() {
     toast(res.added ? `Память уплотнена: +${res.added} фактов` : 'Память уже уплотнена.');
   } catch (err) {
     toast(err.message, true);
+  }
+}
+
+async function importSave(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const res = await api('/api/import', { method: 'POST', body: JSON.stringify(parsed) });
+    toast('История загружена.');
+    store.games = (await api('/api/games')).games || [];
+    location.hash = `#/game/${res.state.id}`;
+  } catch (err) {
+    toast(err instanceof SyntaxError ? 'Это не JSON-файл сохранения.' : err.message, true);
   }
 }
 

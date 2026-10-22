@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
+import { makeId } from './state.js';
 
 const ROOT = path.resolve('data');
 const GAMES = path.join(ROOT, 'games');
@@ -129,6 +130,44 @@ export async function prune() {
   } catch {
     /* ignore */
   }
+}
+
+const REQUIRED = ['hero', 'world', 'scene'];
+
+/** Импорт сохранения: проверяем форму и выдаём новый id. */
+export async function importGame(raw) {
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error('Это не JSON-файл сохранения');
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') throw new Error('Пустой файл');
+  for (const key of REQUIRED) {
+    if (!parsed[key] || typeof parsed[key] !== 'object') throw new Error(`В файле нет раздела «${key}»`);
+  }
+  if (!parsed.hero.name && !parsed.hero.archetypeId) throw new Error('В файле нет героя');
+  const state = migrate(structuredClone(parsed));
+  state.id = makeId(12);
+  state.createdAt = state.createdAt || Date.now();
+  state.updatedAt = Date.now();
+  state.importedAt = Date.now();
+  state.importedFrom = parsed.id || null;
+  state.snapshots = [];
+  state.status = state.hero.hp > 0 ? 'active' : 'dead';
+  state.hero.alive = state.hero.hp > 0;
+  state.audit = state.audit || [];
+  state.audit.push({
+    turn: state.scene?.turn || 1,
+    at: Date.now(),
+    kind: 'import',
+    severity: 'soft',
+    message: `История импортирована из файла${parsed.id ? ` (${parsed.id})` : ''}.`
+  });
+  await saveGame(state);
+  return state;
 }
 
 export function exportMarkdown(state) {

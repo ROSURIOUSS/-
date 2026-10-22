@@ -8,10 +8,10 @@ import { loadEnv } from './env.js';
 loadEnv();
 
 import { aiAvailable, aiConfig, aiStatus } from './ai.js';
-import { sanitizeAction, noteCheatAttempt, runTurn, startNewGame, forkGame, compactStateMemory, engineStats, DEMO_MODE, rest } from './engine.js';
+import { sanitizeAction, noteCheatAttempt, runTurn, startNewGame, forkGame, compactStateMemory, engineStats, DEMO_MODE, rest, rewind } from './engine.js';
 import { publicState } from './state.js';
 import { PRESETS, ARCHETYPES, TRAITS, BURDENS, DIFFICULTIES } from './worlds.js';
-import { saveGame, loadGame, listGames, deleteGame, exportMarkdown, prune } from './store.js';
+import { saveGame, loadGame, listGames, deleteGame, exportMarkdown, prune, importGame } from './store.js';
 import { aiAudit } from './auditor.js';
 import { memoryIndexSize, chronicle } from './memory.js';
 import { DAILY_LIMIT, PORT, HOST } from './config.js';
@@ -180,6 +180,22 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/import') {
+    let body;
+    try {
+      body = await readBody(req, 4 * 1024 * 1024);
+    } catch (e) {
+      return json(res, 400, { error: e.message });
+    }
+    if (!creationAllowed(req)) return json(res, 429, { error: 'Слишком много новых историй за час.' });
+    try {
+      const imported = await importGame(body?.state ?? body);
+      return json(res, 200, { state: publicState(imported) });
+    } catch (err) {
+      return json(res, 400, { error: err?.message || 'Файл не похож на сохранение Лории' });
+    }
+  }
+
   const id = parts[2];
   const tail = parts[3];
   if (!id) return json(res, 404, { error: 'Не найдено' });
@@ -194,6 +210,17 @@ async function handleApi(req, res, url) {
       chronicle: chronicle(state),
       usage: state.usage || null
     });
+  }
+
+  if (req.method === 'GET' && tail === 'download') {
+    const body = JSON.stringify(state, null, 2);
+    res.writeHead(200, {
+      ...SECURITY_HEADERS,
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="loria-save-${state.id}.json"`,
+      'Cache-Control': 'no-store'
+    });
+    return res.end(body);
   }
 
   if (req.method === 'GET' && tail === 'export') {
@@ -272,6 +299,15 @@ async function handleApi(req, res, url) {
       locks.delete(id);
     }
     return;
+  }
+
+  if (req.method === 'POST' && tail === 'rewind') {
+    try {
+      const result = await rewind(state);
+      return json(res, 200, { state: publicState(result.state), undoneTurn: result.undoneTurn, remaining: result.remaining });
+    } catch (err) {
+      return json(res, err.status === 400 ? 400 : 500, { error: err?.message || 'Отмена не удалась' });
+    }
   }
 
   if (req.method === 'POST' && tail === 'rest') {
