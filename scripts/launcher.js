@@ -54,9 +54,16 @@ const HOME = path.resolve(
 );
 const dataDir = path.resolve(process.env.LORIA_DATA_DIR || path.join(HOME, 'data'));
 
-// .env читаем сначала рядом с exe, потом в домашней папке.
+// .env читаем сначала рядом с exe (и на уровень выше — удобно при сборке из репозитория),
+// потом в домашней папке. Уже заданные переменные не перетираются.
 loadEnv(path.join(exeDir, '.env'));
+loadEnv(path.join(exeDir, '..', '.env'));
 if (HOME !== exeDir) loadEnv(path.join(HOME, '.env'));
+
+if (process.env.LORIA_DEBUG) {
+  const parentEnv = path.join(exeDir, '..', '.env');
+  console.log('[debug] exeDir=%s cwd=%s parent=%s exists=%s key=%s', exeDir, process.cwd(), parentEnv, fs.existsSync(parentEnv), process.env.OPENROUTER_API_KEY ? 'set' : 'empty');
+}
 
 // ---------- встроенная статика ----------
 
@@ -99,10 +106,21 @@ function writeEnvExample() {
       [
         '# Скопируй этот файл в .env и впиши свой ключ OpenRouter, чтобы играл живой мастер.',
         '# Без ключа Лория работает в резервном режиме: правила и броски те же.',
+        '# Ключ: https://openrouter.ai/keys',
         'OPENROUTER_API_KEY=',
-        'LORIA_MODEL=deepseek/deepseek-chat-v3.1',
-        '# PORT=3000',
-        '# LORIA_DEMO=1',
+        '',
+        '# Модель. Если не ответит — сервер переберёт запасные.',
+        'LORIA_MODEL=google/gemini-2.5-flash',
+        '# LORIA_MODELS=',
+        '',
+        '# Демо-режим без ИИ: 1 — включён, 0 — выключен, auto — только если нет ключа',
+        '# LORIA_DEMO=auto',
+        '',
+        '# Лимиты',
+        '# LORIA_DAILY_REQUESTS=200',
+        '',
+        '# Telegram-бот (необязательно)',
+        '# TELEGRAM_BOT_TOKEN=',
         ''
       ].join('\n'),
       'utf8'
