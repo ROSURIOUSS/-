@@ -73,6 +73,7 @@ export function createGame({ worldId, customWorld, hero: heroInput, difficulty =
     difficulty: { id: diff.id, name: diff.name, desc: diff.desc },
     system,
     hero,
+    places: [world.place || 'Начало пути'],
     scene: {
       location: world.place || 'Начало пути',
       time: 'неизвестно',
@@ -337,7 +338,17 @@ export function applyDeltas(state, deltas = {}, options = {}) {
   applyConditions(hero, deltas.conditions);
 
   // --- Мир ---
-  if (deltas.location) state.scene.location = str(deltas.location, 80);
+  if (deltas.location) {
+    const next = str(deltas.location, 80);
+    if (next && next !== state.scene.location) {
+      state.places = Array.isArray(state.places) ? state.places : [];
+      if (!state.places.includes(next)) {
+        state.places.push(next);
+        if (state.places.length > 24) state.places = state.places.slice(-24);
+      }
+    }
+    state.scene.location = next;
+  }
   if (deltas.time) state.scene.time = str(deltas.time, 40);
   if (deltas.weather) state.scene.weather = str(deltas.weather, 40);
   if (Number.isFinite(Number(deltas.tension))) {

@@ -625,6 +625,12 @@ function headerHTML(s) {
     <div class="scene-title">
       <div class="eyebrow">${esc(s.world.genre)} · ${esc(s.difficulty.name)} · ход ${s.scene.turn - 1}</div>
       <h1>${esc(s.world.title)}</h1>
+      <div class="scene-hud">
+        <span class="hud-item hud-item--hp"><i style="width:${Math.max(0, Math.min(100, (s.hero.hp / s.hero.maxHp) * 100))}%"></i><b>${s.hero.hp}/${s.hero.maxHp}</b></span>
+        <span class="hud-item hud-item--en"><i style="width:${Math.max(0, Math.min(100, (s.hero.energy / s.hero.maxEnergy) * 100))}%"></i><b>${s.hero.energy}/${s.hero.maxEnergy}</b></span>
+        <span class="hud-item hud-item--xp"><i style="width:${Math.min(100, ((s.hero.xp || 0) / (10 * (s.hero.level || 1))) * 100)}%"></i><b>ур.${s.hero.level || 1}</b></span>
+        ${s.hero.pendingLevel ? `<button class="hud-level" data-act="levelup" aria-label="Выбрать улучшение">✦</button>` : ''}
+      </div>
       <div class="scene-meta">
         <span class="chip chip--accent"><span class="dot"></span>${esc(s.scene.location)}</span>
         <span class="chip">${esc(s.scene.time || 'время не названо')}</span>
@@ -657,7 +663,7 @@ function renderPlay(data) {
     </header>
 
     <div class="play-grid">
-      <section class="transcript" id="transcript">
+      <section class="transcript" id="transcript" aria-live="polite" aria-label="История">
         ${recapHTML(data.chronicle || [], s)}
         ${log.map((entry, i) => turnHTML(entry, i === 0, i === log.length - 1 && log.length > 1)).join('')}
       </section>
@@ -777,6 +783,13 @@ function sheetHTML() {
       <div class="sheet-block__title">Черта и бремя</div>
       <div class="mem-item" style="margin-bottom:6px"><span class="meta">Черта</span>${esc(hero.trait.name)} — ${esc(hero.trait.desc)}</div>
       <div class="mem-item"><span class="meta">Бремя</span>${esc(hero.burden.name)} — ${esc(hero.burden.desc)}</div>
+    </div>
+
+    <div class="sheet-block">
+      <div class="sheet-block__title">Где ты был <span>${(s.places || []).length}</span></div>
+      <div class="item-list">
+        ${(s.places || []).slice(-6).reverse().map((p) => `<span class="item">${esc(p)}</span>`).join('') || '<span class="mem-empty">пока нигде</span>'}
+      </div>
     </div>
 
     <div class="sheet-block">
@@ -1592,7 +1605,10 @@ function onKey(e) {
     const btn = app.querySelector(`.choice[data-i="${Number(e.key) - 1}"]`);
     if (btn) btn.click();
   }
-  if (e.key === 'Escape') hideOverlay();
+  if (e.key === 'Escape') {
+    hideOverlay();
+    document.getElementById('sheet')?.classList.remove('is-open');
+  }
   if (e.key === 'h' || e.key === 'р') {
     document.getElementById('sheet')?.classList.toggle('is-open');
   }

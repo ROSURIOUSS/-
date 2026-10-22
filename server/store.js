@@ -57,6 +57,7 @@ export function migrate(state) {
   state.flags = state.flags && typeof state.flags === 'object' ? state.flags : {};
   state.stats = state.stats || { checks: 0, successes: 0, failures: 0, crits: 0, fumbles: 0, deaths: 0, drained: 0 };
   state.scene = state.scene || { location: 'Начало пути', time: 'неизвестно', weather: '', turn: 1, tension: 1 };
+  if (!Array.isArray(state.places)) state.places = [state.scene.location].filter(Boolean);
   return state;
 }
 
