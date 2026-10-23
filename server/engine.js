@@ -1,14 +1,29 @@
 // Игровой движок: один на веб и на Telegram. Транспорт сюда не заглядывает.
 
 import { aiAvailable, askJson, AIError } from './ai.js';
-import { buildSystemPrompt, buildTurnPrompt, buildOpeningPrompt, buildCompactionPrompt } from './prompts.js';
+import { buildSystemPrompt, buildTurnPrompt, buildOpeningPrompt, buildCompactionPrompt, buildFinalePrompt } from './prompts.js';
 import { retrieve, rememberTurn } from './memory.js';
-import { createGame, serverRoll, applyDeltas, gameOver, makeId, restHero, awardExperience, applyLevelUp, levelChoices } from './state.js';
+import {
+  createGame,
+  serverRoll,
+  applyDeltas,
+  gameOver,
+  makeId,
+  restHero,
+  awardExperience,
+  applyLevelUp,
+  levelChoices,
+  advanceArc,
+  finishGame
+} from './state.js';
 import { actionNeedsRoll } from './dice.js';
 import { saveGame } from './store.js';
 import { localAudit, aiAudit } from './auditor.js';
-import { demoOpening, demoTurn } from './demo.js';
+import { demoOpening, demoTurn, demoFinale } from './demo.js';
 import { DAILY_LIMIT, ENABLE_AI_AUDIT, demoMode } from './config.js';
+
+// Сколько ходов линия может стоять на месте, прежде чем движок сдвинет её сам.
+const ARC_STALL_TURNS = 8;
 
 /**
  * Режим без модели. Пересчитывается на каждом шаге: ключ можно ввести
@@ -100,6 +115,8 @@ export function normalizePlan(data, { minNarration = 120 } = {}) {
   const npcs = (Array.isArray(data.npcs) ? data.npcs : [])
     .filter((n) => n && typeof n.name === 'string')
     .slice(0, 5);
+  // Некоторые модели кладут просьбу о шаге рядом с deltas, а не внутрь.
+  if (deltas.arc === undefined && data.arc !== undefined) deltas.arc = data.arc;
   return {
     narration: narration.slice(0, 6000),
     options,
@@ -107,7 +124,8 @@ export function normalizePlan(data, { minNarration = 120 } = {}) {
     facts,
     npcs,
     dead: Boolean(data.dead),
-    deathReason: String(data.deathReason || '').slice(0, 400)
+    deathReason: String(data.deathReason || '').slice(0, 400),
+    epitaph: String(data.epitaph || '').slice(0, 120)
   };
 }
 
@@ -120,10 +138,64 @@ function mergeUsage(a, b) {
   };
 }
 
+/**
+ * Похожа ли новая сцена на предыдущую. Модели любят начинать ход тем же
+ * предложением, что и прошлый: это ломает ощущение живой истории.
+ */
+export function looksRepeated(prev, next) {
+  const clean = (t) =>
+    String(t || '')
+      .toLowerCase()
+      .replace(/[^а-яёa-z0-9 ]+/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const a = clean(prev);
+  const b = clean(next);
+  if (a.length < 40 || b.length < 40) return false;
+  if (a.slice(0, 90) === b.slice(0, 90)) return true;
+  const grams = (t, n = 4) => {
+    const set = new Set();
+    for (let i = 0; i + n <= Math.min(t.length, 400); i++) set.add(t.slice(i, i + n));
+    return set;
+  };
+  const ga = grams(a);
+  const gb = grams(b);
+  if (!ga.size || !gb.size) return false;
+  let hit = 0;
+  for (const g of gb) if (ga.has(g)) hit += 1;
+  return hit / gb.size > 0.55;
+}
+
 /** Запрос сцены с одной попыткой починки, если модель вернула не JSON. */
-async function askScene({ system, user, temperature = 0.85, maxTokens = 1800, minNarration }) {
+async function askScene({ system, user, temperature = 0.85, maxTokens = 1800, minNarration, avoid = '' }) {
   const first = await askJson({ system, user, temperature, maxTokens });
   let plan = normalizePlan(first.data, { minNarration });
+  if (plan && avoid && looksRepeated(avoid, plan.narration)) {
+    // Сцена — почти копия прошлой: один повтор с прямым запретом, иначе оставляем как есть.
+    try {
+      const retry = await askJson({
+        system: `${system}\n\nПОВТОР: предыдущий ответ начался так же, как прошлая сцена. Это запрещено. Начни с нового образа и новой детали, не пересказывай предыдущую сцену.`,
+        user: `${user}\n\n(Прошлая сцена начиналась так: «${String(avoid).replace(/\s+/g, ' ').slice(0, 160)}…». Не повторяй её зачин и не пересказывай её события.)`,
+        temperature: Math.min(1, temperature + 0.1),
+        maxTokens
+      });
+      const fixed = normalizePlan(retry.data, { minNarration });
+      if (fixed && !looksRepeated(avoid, fixed.narration)) {
+        return {
+          plan: fixed,
+          usage: mergeUsage(first.usage, retry.usage),
+          model: retry.model,
+          latencyMs: (first.latencyMs || 0) + (retry.latencyMs || 0),
+          degraded: Boolean(first.degraded || retry.degraded),
+          repaired: retry.parseMode !== 'direct',
+          repeated: true,
+          finishReason: retry.finishReason
+        };
+      }
+    } catch (err) {
+      console.error('[scene] повтор не удался:', err?.message);
+    }
+  }
   if (plan) {
     return {
       plan,
@@ -198,13 +270,18 @@ function sceneMeta(scene) {
     model: scene.model || null,
     ms: scene.latencyMs || null,
     repaired: Boolean(scene.repaired),
+    repeated: Boolean(scene.repeated),
     degraded: Boolean(scene.degraded)
   };
 }
 
 export function commitPlan(state, plan, { action, roll, demo }) {
   const deltas = plan.deltas && typeof plan.deltas === 'object' ? plan.deltas : {};
+  const questsBefore = new Map((state.memory.quests || []).map((q) => [q.title.toLowerCase(), q.status]));
   const applied = applyDeltas(state, deltas, { action, free: action === 'Начало истории' });
+  const questsClosed = (state.memory.quests || []).filter(
+    (q) => q.status === 'done' && questsBefore.get(q.title.toLowerCase()) !== 'done'
+  );
 
   rememberTurn(state, {
     turn: state.scene.turn,
@@ -229,6 +306,37 @@ export function commitPlan(state, plan, { action, roll, demo }) {
     died = true;
     if (plan.deathReason) state.deathReason = plan.deathReason;
     gameOver(state, plan.deathReason || 'Герой погиб.');
+  }
+
+  // ----- сюжетная линия -----
+  // Модель может попросить шаг (deltas.arc), закрытое задание двигает линию само,
+  // а если линия стоит слишком долго — движок сдвигает её по темпу.
+  let arcInfo = null;
+  const arc = state.arc;
+  if (arc && !died) {
+    const modelSignal = deltas.arc === true || Number(deltas.arc) >= 1;
+    const questSignal = questsClosed.length > 0;
+    const fumbled = Boolean(roll?.fumble);
+    // Два шага подряд — это уже не история, а пересказ оглавления.
+    const tooSoon = (arc.step || 0) > 0 && state.scene.turn - (arc.advancedAt || 0) < 2;
+    const stalled = state.scene.turn - (arc.advancedAt || 1) >= ARC_STALL_TURNS;
+    const wanted = !fumbled && (modelSignal || questSignal) && !tooSoon;
+    const paced = !wanted && !fumbled && stalled && !arc.complete && (!roll || roll.success);
+    if (wanted || paced) {
+      const moved = advanceArc(state, { reason: modelSignal ? 'master' : questSignal ? 'quest' : 'pace' });
+      if (moved.advanced) {
+        arcInfo = { ...moved, title: arc.title, paced: Boolean(paced) };
+        state.audit.push({
+          turn: state.scene.turn,
+          at: Date.now(),
+          kind: moved.complete ? 'arc-final' : 'arc',
+          severity: 'soft',
+          message: moved.complete
+            ? `Линия «${arc.title}» пройдена: ${moved.total} из ${moved.total}. Теперь историю можно завершить финалом.`
+            : `Линия «${arc.title}»: шаг ${moved.step}/${moved.total} — «${moved.stepName}».`
+        });
+      }
+    }
   }
 
   const turnEntry = {
@@ -259,6 +367,7 @@ export function commitPlan(state, plan, { action, roll, demo }) {
     deltas: { hp: state.hero.hp, energy: state.hero.energy, gold: state.hero.gold },
     changes: applied.changes,
     limits: applied.notes,
+    arc: arcInfo,
     demo: Boolean(demo)
   };
   progress(state, turnEntry);
@@ -323,12 +432,14 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
     try {
       onPhase('writing', {});
       const retrieved = retrieve(state, action);
+      const prevNarration = (state.log || []).slice(-1)[0]?.narration || '';
       const scene = await askScene({
         system: buildSystemPrompt(state, retrieved),
         user: buildTurnPrompt(state, { action, roll }),
         temperature: 0.8,
         maxTokens: 1900,
-        minNarration: 120
+        minNarration: 120,
+        avoid: prevNarration
       });
       plan = scene.plan;
       if (!plan) throw new AIError('Модель вернула пустую сцену', { status: 502 });
@@ -388,6 +499,89 @@ export async function runTurn(state, action, onPhase = () => {}, { audit = false
   return { state, turn: turnEntry, demo, aiError, ai: aiInfo };
 }
 
+/**
+ * Финал: арка пройдена, игрок решает закончить историю. Мастер пишет эпилог,
+ * но исход фиксирует сервер — статус, эпиграф и отметка в статистике.
+ */
+export async function runFinale(state, onPhase = () => {}) {
+  if (state.status === 'dead') throw new AIError('История уже закончена смертью героя.', { status: 409 });
+  if (state.status === 'finished') {
+    return { state, finale: state.finale, demo: Boolean(state.finale?.demo), aiError: null, ai: null, already: true };
+  }
+  const arc = state.arc;
+  if (!arc || !arc.complete) {
+    throw new AIError('Линия ещё не пройдена: финал открывается на последнем шаге.', { status: 400 });
+  }
+
+  onPhase('finale', {});
+  let text = '';
+  let epitaphAI = '';
+  let demo = false;
+  let aiError = null;
+  let aiInfo = null;
+
+  if (!isDemo() && aiAvailable() && usageCheck(state)) {
+    try {
+      const scene = await askScene({
+        system: buildFinalePrompt(state),
+        user: 'Напиши финальную сцену этой истории. Верни только JSON.',
+        temperature: 0.9,
+        maxTokens: 2000,
+        minNarration: 150
+      });
+      if (!scene.plan) throw new AIError('Модель не вернула финал', { status: 502 });
+      text = scene.plan.narration;
+      epitaphAI = String(scene.plan.epitaph || '').slice(0, 120);
+      aiInfo = sceneMeta(scene);
+      bumpUsage(state, scene.usage);
+    } catch (err) {
+      aiError = err?.message || 'Ошибка модели';
+      state.audit.push({
+        turn: state.scene.turn,
+        at: Date.now(),
+        kind: 'ai-error',
+        severity: 'soft',
+        message: `Финал: ${String(aiError).slice(0, 280)}`
+      });
+    }
+  }
+  if (!text) {
+    demo = true;
+    text = demoFinale(state);
+  }
+
+  const epitaph =
+    epitaphAI ||
+    `${state.hero.name}, ${state.hero.archetype} · ${state.world.title} · ходов ${state.scene.turn - 1} · уровень ${state.hero.level}`;
+  finishGame(state, { text, epitaph, demo, model: aiInfo?.model || null });
+  // Финал — тоже сцена: он попадает в ленту и в хронику, а не живёт только в модальном окне.
+  state.log.push({
+    turn: state.scene.turn,
+    at: Date.now(),
+    action: 'Финал',
+    narration: text,
+    options: [],
+    check: null,
+    deltas: { hp: state.hero.hp, energy: state.hero.energy, gold: state.hero.gold },
+    changes: [],
+    limits: [],
+    arc: null,
+    epitaph,
+    finale: true,
+    demo
+  });
+  state.pendingOpening = false;
+  state.audit.push({
+    turn: state.scene.turn,
+    at: Date.now(),
+    kind: 'finale',
+    severity: 'soft',
+    message: `История завершена финалом: линия «${state.arc.title}» пройдена.`
+  });
+  await saveGame(state);
+  return { state, finale: state.finale, demo, aiError, ai: aiInfo };
+}
+
 const MAX_SNAPSHOTS = 2;
 
 /** Снимок состояния до хода — для отмены. Храним только то, что меняет ход. */
@@ -400,6 +594,7 @@ export function pushSnapshot(state) {
     flags: structuredClone(state.flags),
     stats: structuredClone(state.stats),
     memory: structuredClone(state.memory),
+    arc: structuredClone(state.arc || null),
     logLength: (state.log || []).length,
     auditLength: (state.audit || []).length
   };
@@ -420,10 +615,13 @@ export async function rewind(state) {
   state.flags = snapshot.flags;
   state.stats = snapshot.stats;
   state.memory = snapshot.memory;
+  if (snapshot.arc) state.arc = snapshot.arc;
   state.log = (state.log || []).slice(0, snapshot.logLength);
   state.audit = (state.audit || []).slice(0, snapshot.auditLength);
   state.snapshots = (state.snapshots || []).slice(1);
   state.status = 'active';
+  // Откат из финала возвращает историю в игру: эпилог больше не финал.
+  if (state.finale) delete state.finale;
   state.updatedAt = Date.now();
   state.audit.push({
     turn: state.scene.turn,
@@ -458,6 +656,7 @@ export async function forkGame(state) {
   copy.status = 'active';
   copy.hero.alive = true;
   copy.hero.hp = Math.max(1, Math.round(copy.hero.maxHp * 0.6));
+  delete copy.finale;
   copy.scene.turn += 1;
   copy.audit.push({
     turn: copy.scene.turn,

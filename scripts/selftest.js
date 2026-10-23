@@ -4,7 +4,18 @@ import assert from 'node:assert/strict';
 
 process.env.LORIA_DEMO = '1';
 
-const { createGame, serverRoll, applyDeltas, restHero, publicState, awardExperience, applyLevelUp, levelChoices } = await import('../server/state.js');
+const {
+  createGame,
+  serverRoll,
+  applyDeltas,
+  restHero,
+  publicState,
+  awardExperience,
+  applyLevelUp,
+  levelChoices,
+  advanceArc,
+  finishGame
+} = await import('../server/state.js');
 const { retrieve, rememberTurn, memoryIndexSize } = await import('../server/memory.js');
 const { demoOpening } = await import('../server/demo.js');
 const engine = await import('../server/engine.js');
@@ -12,6 +23,7 @@ const { sanitizeAction, normalizePlan, commitPlan } = engine;
 const { migrate, exportMarkdown } = await import('../server/store.js');
 const { guessStat, actionDifficulty, resolveCheck, actionNeedsRoll } = await import('../server/dice.js');
 const { buildSystemPrompt } = await import('../server/prompts.js');
+const { PRESETS, arcForWorld, GENERIC_ARC } = await import('../server/worlds.js');
 const { parseModelJson } = await import('../server/ai.js');
 
 let passed = 0;
@@ -310,7 +322,109 @@ test('упоминания NPC обновляют отношение, а не д
   assert.equal(g.memory.npcs[0].note, 'обманут');
 });
 
-// ---- нормализация ответа модели ----
+// ---- сюжетная линия ----
+test('у каждого мира есть арка из пяти шагов', () => {
+  const seen = new Set();
+  for (const w of PRESETS) {
+    assert.ok(w.arc?.title, `у мира ${w.id} нет линии`);
+    assert.equal(w.arc.steps.length, 5, `у мира ${w.id} не пять шагов`);
+    assert.ok(!seen.has(w.arc.title), 'линии миров повторяются');
+    seen.add(w.arc.title);
+  }
+});
+
+test('линия двигается только вперёд и не перескакивает шаг', () => {
+  const g = createGame({ worldId: 'ash', hero: { archetypeId: 'soldier' } });
+  assert.equal(g.arc.step, 0);
+  assert.ok(!('arc' in g.world), 'шаги утекли в мир клиента');
+  const first = advanceArc(g);
+  assert.equal(first.step, 1);
+  assert.equal(first.stepName, g.arc.steps[0]);
+  const before = g.arc.step;
+  assert.ok(advanceArc(g).step > before);
+  for (let i = 0; i < 9; i++) advanceArc(g);
+  assert.equal(g.arc.step, 5, 'линия перескочила финал');
+  assert.equal(g.arc.complete, true);
+  assert.equal(g.arc.advancedAt, 1);
+});
+
+test('клиент видит только текущий шаг линии', () => {
+  const g = createGame({ worldId: 'rail', hero: { archetypeId: 'engineer' } });
+  const pub = publicState(g);
+  assert.equal(pub.arc.step, 0);
+  assert.equal(pub.arc.current, g.arc.steps[0]);
+  assert.equal(pub.arc.total, 5);
+  const blob = JSON.stringify(pub);
+  assert.ok(!blob.includes(g.arc.steps[3]), 'будущий шаг попал в клиент');
+  advanceArc(g);
+  const after = publicState(g);
+  assert.equal(after.arc.done.length, 1);
+  assert.equal(after.arc.left, 4);
+});
+
+test('финал открывается только после последнего шага', () => {
+  const g = createGame({ worldId: 'court', hero: { archetypeId: 'speaker' } });
+  assert.equal(publicState(g).arc.complete, false);
+  for (let i = 0; i < 5; i++) advanceArc(g);
+  assert.equal(publicState(g).arc.complete, true);
+  assert.equal(publicState(g).arc.current, null);
+  finishGame(g, { text: 'История закончена.', epitaph: 'Финал' });
+  assert.equal(g.status, 'finished');
+  assert.equal(publicState(g).finale.text, 'История закончена.');
+});
+
+test('закрытое задание двигает линию, а провал броска — нет', () => {
+  const g = createGame({ worldId: 'forest', hero: { archetypeId: 'hunter' } });
+  const plan = (extra) => ({
+    narration: 'Ты стоишь в пахнущей хвоей темноте и слушаешь лес. Ветка хрустит за спиной. '.repeat(3),
+    options: ['Осмотреться', 'Идти вглубь', 'Вернуться'],
+    deltas: { quests: [], ...extra },
+    facts: [],
+    npcs: [],
+    dead: false
+  });
+  const ok = { success: true, critical: false, fumble: false };
+
+  // Модель просит шаг — сервер соглашается.
+  const a = commitPlan(g, plan({ arc: 1 }), { action: 'Иду к частоколу', roll: ok });
+  assert.equal(a.turnEntry.arc?.step, 1);
+
+  // На следующем ходу шаг не двигается: это уже оглавление, а не история.
+  const soon = commitPlan(g, plan({ arc: 1 }), { action: 'Слушаю лес', roll: ok });
+  assert.equal(soon.turnEntry.arc, null, 'линия прошла два шага подряд');
+  assert.equal(g.arc.step, 1);
+
+  // Критический провал не двигает линию, даже когда ход уже не «слишком рано».
+  const b = commitPlan(g, plan({ arc: 1 }), { action: 'Прыгаю через ров', roll: { success: false, critical: false, fumble: true } });
+  assert.equal(b.turnEntry.arc, null);
+  assert.equal(g.arc.step, 1);
+
+  // А закрытое задание — двигает.
+  const c = commitPlan(g, plan({ quests: [{ title: 'Найти лесника', status: 'done' }] }), { action: 'Говорю с лесником', roll: ok });
+  assert.equal(c.turnEntry.arc?.reason, 'quest');
+  assert.equal(g.arc.step, 2);
+});
+
+test('самоповтор сцены распознаётся, живая сцена — нет', () => {
+  const prev =
+    'Ты выходишь на площадь, и пепел оседает на плечах серой пылью. Стража у арки делает вид, что тебя не видит, но копьё дрожит. Где-то внизу тлеет балка.';
+  assert.equal(engine.looksRepeated(prev, prev), true, 'точный повтор не поймали');
+  assert.equal(
+    engine.looksRepeated(prev, prev.replace('Ты выходишь на площадь', 'Ты входишь на площадь')),
+    true,
+    'почти дословный повтор не поймали'
+  );
+  assert.equal(
+    engine.looksRepeated(
+      prev,
+      'В подворотне пахнет мокрой шерстью и дымом. Женщина с ведром смотрит мимо тебя и не отвечает на приветствие. Дальше по переулку кто-то роняет железо.'
+    ),
+    false,
+    'разные сцены склеились'
+  );
+  assert.equal(engine.looksRepeated('', prev), false);
+});
+
 test('нормализация чинит варианты и отбрасывает пустые сцены', () => {
   assert.equal(engine.normalizePlan({ narration: 'коротко' }), null);
   const plan = engine.normalizePlan({

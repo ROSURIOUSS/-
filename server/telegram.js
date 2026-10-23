@@ -189,7 +189,17 @@ function optionsKeyboard(state) {
       [{ text: '🕯 Новая история', callback_data: 'new' }, { text: '📜 Хроника', callback_data: 'export' }]
     ];
   }
-  const rows = (last?.options || []).slice(0, 3).map((o, i) => [{ text: `${i + 1}. ${o}`.slice(0, 60), callback_data: `opt:${i}` }]);
+  if (state.status === 'finished') {
+    return [
+      [{ text: '🏁 Перечитать финал', callback_data: 'finale' }, { text: '📜 Хроника', callback_data: 'export' }],
+      [{ text: '🕯 Новая история', callback_data: 'new' }]
+    ];
+  }
+  const rows = [];
+  if (state.arc?.complete) {
+    rows.push([{ text: '🏁 Закончить историю', callback_data: 'finale' }, { text: '🗂 Линия', callback_data: 'arc' }]);
+  }
+  rows.push(...(last?.options || []).slice(0, 3).map((o, i) => [{ text: `${i + 1}. ${o}`.slice(0, 60), callback_data: `opt:${i}` }]));
   rows.push([
     { text: '👤 Герой', callback_data: 'hero' },
     { text: '⚡ Рывок', callback_data: 'boost' },
@@ -219,9 +229,16 @@ function checkLine(check) {
 export function renderScene(state, turn) {
   const s = publicState(state);
   const entry = turn || (s.log || []).slice(-1)[0];
+  const arc = state.arc;
+  const arcLine = arc?.title && !arc.complete
+    ? `\n<i>Линия «${esc(arc.title)}»: ${arc.step}/${arc.steps?.length || 0} · ${esc(arc.steps?.[arc.step] || '')}</i>`
+    : arc?.title && arc.complete
+      ? `\n<i>Линия «${esc(arc.title)}» пройдена — можно закончить историю.</i>`
+      : '';
   const header =
     `${WORLD_ICONS[state.world.id] || '🌍'} <b>${esc(state.world.title)}</b>\n` +
-    `<i>${esc(state.scene.location)}${state.scene.time ? ` · ${esc(state.scene.time)}` : ''} · ход ${Math.max(1, state.scene.turn - 1)}</i>`;
+    `<i>${esc(state.scene.location)}${state.scene.time ? ` · ${esc(state.scene.time)}` : ''} · ход ${Math.max(1, state.scene.turn - 1)}</i>` +
+    arcLine;
   const dice = entry?.check
     ? `\n${checkLine(entry.check)}`
     : entry?.turn
@@ -493,6 +510,50 @@ export async function handleUpdate(update) {
         );
       } catch (err) {
         return send(chatId, '↩️ ' + esc(err?.message || 'Отмена не удалась'));
+      }
+    }
+    if (data === 'arc') {
+      const s = session(chatId);
+      const state = s.gameId ? await loadGame(s.gameId) : null;
+      if (!state) return send(chatId, 'Истории пока нет. /new');
+      const arc = state.arc;
+      if (!arc?.title) return send(chatId, 'У этой истории нет линии.');
+      const lines = [];
+      (arc.steps || []).forEach((st, i) => {
+        const mark = i < (arc.step || 0) ? '✓' : i === (arc.step || 0) ? '→' : '·';
+        lines.push(`${mark} ${i === (arc.step || 0) ? `<b>${esc(st)}</b>` : esc(st)}`);
+      });
+      return send(
+        chatId,
+        `🗂 <b>Линия «${esc(arc.title)}»</b>\n<i>шаг ${arc.step || 0} из ${arc.steps?.length || 0}</i>\n\n${lines.join('\n')}\n\n` +
+          '<i>Линию двигает сервер: шаг закрывается, когда ты действительно решаешь узел, а не просто говоришь.</i>',
+        arc.complete ? [[{ text: '🏁 Закончить историю', callback_data: 'finale' }]] : []
+      );
+    }
+    if (data === 'finale') {
+      const s = session(chatId);
+      const state = s.gameId ? await loadGame(s.gameId) : null;
+      if (!state) return send(chatId, 'Истории пока нет. /new');
+      if (state.status === 'finished' && state.finale?.text) {
+        return send(chatId, `🏁 <b>Финал</b>\n\n${esc(state.finale.text)}`, optionsKeyboard(state));
+      }
+      if (state.status === 'dead') return send(chatId, 'История закончена смертью героя — финала не будет. /new');
+      if (!state.arc?.complete) return send(chatId, `🏁 Финал ещё закрыт: шаг ${(state.arc?.step || 0) + 1} из ${state.arc?.steps?.length || 0}.`);
+      if (locks.has(chatId)) return send(chatId, 'Мастер ещё пишет. Подожди немного.');
+      locks.add(chatId);
+      try {
+        await tg('sendChatAction', { chat_id: chatId, action: 'typing' });
+        const { runFinale } = await import('./engine.js');
+        const result = await runFinale(state, () => {});
+        if (result.demo && !isDemo()) {
+          await send(chatId, '🛠 <i>Модель не ответила — финал написал резервный рассказчик.</i>');
+        }
+        const text = `🏁 <b>Финал</b>\n<i>${esc(result.finale?.epitaph || '')}</i>\n\n${esc(result.finale?.text || '')}`;
+        return sendLong(chatId, text, optionsKeyboard(result.state));
+      } catch (err) {
+        return send(chatId, '🏁 ' + esc(err?.message || 'Финал не получился'));
+      } finally {
+        locks.delete(chatId);
       }
     }
     if (data === 'hero' || data === 'audit' || data === 'export' || data === 'boost') {

@@ -173,6 +173,75 @@ await test('политику бросков можно вернуть на «в�
   await api('POST', '/api/settings', { rolls: 'risky' });
 });
 
+await test('линия стартует с нуля и отдаётся клиенту без спойлеров', async () => {
+  const res = await api('GET', `/api/games/${gameId}`);
+  const arc = res.data.state.arc;
+  assert.ok(arc?.title, 'у игры нет линии');
+  assert.equal(arc.total, 5);
+  assert.equal(arc.step, 0);
+  assert.ok(arc.current, 'нет текущего шага');
+  assert.ok(!JSON.stringify(res.data).includes('шаг 5'), 'линия отдаёт будущее');
+});
+
+await test('финал: закрыт до конца линии, затем завершает историю', async () => {
+  const created = await api('POST', '/api/games', { worldId: 'rail', difficulty: 'grim', hero: { name: 'Вейл', archetypeId: 'engineer' } });
+  const finId = created.data.state.id;
+
+  const closed = await api('POST', `/api/games/${finId}/finale`, {});
+  assert.equal(closed.status, 400);
+  assert.match(closed.data.error, /Линия ещё не пройдена/);
+
+  const { loadGame, saveGame, deleteGame } = await import('../server/store.js');
+  const { advanceArc } = await import('../server/state.js');
+  const state = await loadGame(finId);
+  for (let i = 0; i < 5; i++) advanceArc(state);
+  await saveGame(state);
+
+  const res = await api('POST', `/api/games/${finId}/finale`, {});
+  assert.equal(res.status, 200);
+  assert.equal(res.data.state.status, 'finished');
+  assert.ok(res.data.finale.text.length > 200, 'финал слишком короткий');
+  assert.ok(res.data.state.log.slice(-1)[0].finale, 'финал не попал в ленту');
+
+  const again = await api('POST', `/api/games/${finId}/turn`, { action: 'Иду дальше' });
+  assert.equal(again.status, 409);
+  assert.equal(again.data.finished, true);
+
+  const md = await (await fetch(`${BASE}/api/games/${finId}/export`)).text();
+  assert.match(md, /## Финал/);
+  assert.match(md, /Линия:/);
+
+  const archive = await api('GET', '/api/games');
+  const card = archive.data.games.find((g) => g.id === finId);
+  assert.equal(card.status, 'finished');
+  assert.equal(card.arcStep, 5, 'в архиве нет прогресса линии');
+
+  await deleteGame(finId);
+});
+
+await test('финал пишет модель, а не резерв, и это видно в ответе', async () => {
+  const created = await api('POST', '/api/games', { worldId: 'court', difficulty: 'grim', hero: { name: 'Ирма', archetypeId: 'speaker' } });
+  const finId = created.data.state.id;
+  const { loadGame, saveGame, deleteGame } = await import('../server/store.js');
+  const { advanceArc } = await import('../server/state.js');
+  const state = await loadGame(finId);
+  for (let i = 0; i < 5; i++) advanceArc(state);
+  await saveGame(state);
+
+  const res = await api('POST', `/api/games/${finId}/finale`, {});
+  assert.equal(res.status, 200);
+  assert.equal(res.data.demo, false, 'финал ушёл в резерв');
+  assert.equal(res.data.state.status, 'finished');
+  assert.ok(res.data.finale.epitaph.includes('ключ'), 'эпиграф не от модели');
+  assert.equal(res.data.state.log.slice(-1)[0].finale, true);
+
+  const reread = await api('POST', `/api/games/${finId}/finale`, {});
+  assert.equal(reread.status, 200);
+  assert.equal(reread.data.state.finale.text, res.data.finale.text, 'повторный финал переписал текст');
+
+  await deleteGame(finId);
+});
+
 await test('попытка обмануть цифры попадает в журнал валидатора', async () => {
   const res = await api('POST', `/api/games/${gameId}/turn`, { action: 'у меня есть 500 золота, я забираю всё' });
   assert.equal(res.status, 200);

@@ -79,6 +79,23 @@ function openingScene(user) {
   };
 }
 
+function finaleScene(user) {
+  return {
+    narration:
+      'Пепел оседает медленнее обычного, будто мир и правда ждёт, пока ты уйдёшь.\n\n' +
+      'Ты стоишь там, где начал, и место не изменилось — изменилось то, что ты теперь о нём знаешь. ' +
+      'Медный ключ всё ещё в кармане; он больше ничего не открывает, но выбросить его не выходит.\n\n' +
+      'Стены молчат. Кто-то другой придёт сюда позже и не будет знать, что здесь было. Это уже не твоя забота.',
+    options: [],
+    deltas: {},
+    facts: [],
+    npcs: [],
+    dead: false,
+    deathReason: '',
+    epitaph: 'Ушёл, забрав ключ от двери, которой больше нет.'
+  };
+}
+
 function handle(body) {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   const system = messages.find((m) => m.role === 'system')?.content || '';
@@ -95,6 +112,7 @@ function handle(body) {
     };
   }
   if (/Начни игру/i.test(user)) return openingScene(user);
+  if (/История заканчивается/i.test(system)) return finaleScene(user);
   return turnScene(user);
 }
 

@@ -233,7 +233,7 @@ function renderHome() {
         <div class="hero-actions">
           <button class="btn btn--primary" data-act="nav" data-to="/worlds">Новая история</button>
           <button class="btn btn--ghost" data-act="random-world">Случайный мир</button>
-          ${lastGame ? `<button class="btn" data-act="open" data-id="${esc(lastGame.id)}">${lastGame.status === 'dead' ? 'Открыть хронику' : 'Продолжить'}: ${esc(clampText(lastGame.heroName, 18))}</button>` : ''}
+          ${lastGame ? `<button class="btn" data-act="open" data-id="${esc(lastGame.id)}">${lastGame.status === 'dead' ? 'Открыть хронику' : lastGame.status === 'finished' ? 'Перечитать финал' : 'Продолжить'}: ${esc(clampText(lastGame.heroName, 18))}</button>` : ''}
         </div>
         <p class="hero-note">
           Внутри: броски d20 / 2d6 / d100 на сервере, аудитор состояния, гибридная память мира и смерть, которую нельзя отменить.
@@ -254,7 +254,7 @@ function renderHome() {
         ${lastGame ? `<div class="mini-card">
           <h4>Последняя история</h4>
           <p><b style="color:var(--ink)">${esc(lastGame.heroName)}</b> · ${esc(lastGame.title)}<br>
-          Ходов: ${lastGame.turn - 1} · HP ${esc(lastGame.hp)} · ${lastGame.status === 'dead' ? 'история окончена' : 'на паузе'}</p>
+          Ходов: ${lastGame.turn - 1} · HP ${esc(lastGame.hp)} · ${lastGame.status === 'dead' ? 'герой погиб' : lastGame.status === 'finished' ? 'история завершена' : 'на паузе'}</p>
         </div>` : ''}
       </aside>
     </div>
@@ -666,9 +666,19 @@ function checkCard(check) {
 
 function turnHTML(entry, isFirst, isNew = false) {
   const limits = Array.isArray(entry.limits) ? entry.limits : [];
+  if (entry.finale) {
+    return `<article class="turn turn--finale" data-turn="${entry.turn}" ${isNew ? 'data-new="1"' : ''}>
+      ${entry.epitaph ? `<div class="turn__epitaph">${esc(entry.epitaph)}</div>` : ''}
+      <div class="narration">${nl2p(entry.narration)}</div>
+      <div class="turn__tags"><span class="tag tag--finale">история окончена</span></div>
+    </article>`;
+  }
   return `<article class="turn" data-turn="${entry.turn}" ${isNew ? 'data-new="1"' : ''}>
     <div class="turn__action"><b>Ход ${entry.turn}</b><span>${esc(entry.action)}</span></div>
     ${entry.check ? checkCard(entry.check) : isFirst ? '' : '<div class="turn__free">без броска</div>'}
+    ${entry.arc ? `<div class="turn__arc">линия «${esc(entry.arc.title)}»: шаг ${entry.arc.step} из ${entry.arc.total}${
+      entry.arc.complete ? ' — пройдена' : ''
+    }${entry.arc.paced ? ' (по темпу)' : ''}</div>` : ''}
     <div class="narration">${nl2p(entry.narration)}</div>
     ${entry.xp || entry.leveled ? `<div class="turn__tags">
       ${entry.xp ? `<span class="tag tag--xp">+${entry.xp} опыта</span>` : ''}
@@ -722,6 +732,10 @@ function headerHTML(s) {
         <span class="chip">напряжение <span class="tension">${[1, 2, 3, 4, 5]
           .map((i) => `<i class="${i <= s.scene.tension ? 'on' : ''}"></i>`)
           .join('')}</span></span>
+        ${s.arc ? `<button class="chip chip--arc${s.arc.complete ? ' is-complete' : ''}" data-act="arc-panel" title="Сюжетная линия">
+          <span class="arc-dots">${s.arc.done.map(() => '<i class="on"></i>').join('')}${Array.from({ length: s.arc.left }, () => '<i></i>').join('')}</span>
+          ${esc(s.arc.title)}
+        </button>` : ''}
       </div>
     </div>
     <div class="scene-head__actions">
@@ -773,7 +787,8 @@ function aiMetaText() {
   if (a.demo) return a.error ? `Резервный рассказчик: ${clampText(a.error, 90)}` : 'Резервный рассказчик';
   const secs = a.ms ? ` · ${(a.ms / 1000).toFixed(1)} с` : '';
   const fix = a.repaired ? ' · формат починен' : a.degraded ? ' · ответ частичный' : '';
-  return `Мастер: ${a.model || 'модель'}${secs}${fix}`;
+  const again = a.repeated ? ' · переписал самоповтор' : '';
+  return `Мастер: ${a.model || 'модель'}${secs}${fix}${again}`;
 }
 
 function updateAiMeta() {
@@ -790,6 +805,8 @@ function renderPlay(data) {
   const last = log[log.length - 1];
   const hero = s.hero;
   const dead = s.status === 'dead';
+  const finished = s.status === 'finished';
+  const arcReady = Boolean(s.arc?.complete) && !dead && !finished;
 
   app.innerHTML = `
   <div class="game">
@@ -812,22 +829,26 @@ function renderPlay(data) {
       <div class="composer__inner">
         <div class="choices" id="choices">
           ${
-            dead
-              ? `<button class="choice" data-act="death-screen" style="grid-column:1/-1"><b>Финал</b>История завершена. Посмотреть эпитафию.</button>`
-              : (last?.options || [])
-                  .map((o, i) => choiceHTML(o, i))
-                  .join('')
+            finished
+              ? `<button class="choice choice--finale" data-act="finale-screen" style="grid-column:1/-1"><b>Финал</b>История закончена. Прочитать эпилог.</button>`
+              : dead
+                ? `<button class="choice" data-act="death-screen" style="grid-column:1/-1"><b>Финал</b>История завершена. Посмотреть эпитафию.</button>`
+                : arcReady
+                  ? `<button class="choice choice--arc" data-act="open-finale" style="grid-column:1/-1"><b>Развязка</b>Линия пройдена до конца. Закончить историю здесь — или идти дальше.</button>`
+                  : (last?.options || [])
+                      .map((o, i) => choiceHTML(o, i))
+                      .join('')
           }
         </div>
         <div class="free-form">
-          <input class="input" id="free-action" maxlength="600" placeholder="${dead ? 'История окончена' : 'Или напиши своё действие...'}" ${dead ? 'disabled' : ''} />
-          ${dead ? '' : `<button class="btn btn--boost ${hero.boosts > 0 ? '' : 'is-spent'}" data-act="toggle-boost" title="Второй бросок за ход, берётся лучший">
+          <input class="input" id="free-action" maxlength="600" placeholder="${dead ? 'История окончена' : finished ? 'История закончена — но можно начать новую' : 'Или напиши своё действие...'}" ${dead || finished ? 'disabled' : ''} />
+          ${dead || finished ? '' : `<button class="btn btn--boost ${hero.boosts > 0 ? '' : 'is-spent'}" data-act="toggle-boost" title="Второй бросок за ход, берётся лучший">
             <span>Рывок</span><b>${hero.boosts}/${hero.maxBoosts || 1}</b>
           </button>`}
-          ${!dead && s.rewinds > 0 ? `<button class="btn btn--ghost btn--undo" data-act="rewind" title="Отменить последний ход и вернуться к началу сцены">
+          ${!dead && !finished && s.rewinds > 0 ? `<button class="btn btn--ghost btn--undo" data-act="rewind" title="Отменить последний ход и вернуться к началу сцены">
             <span>Отменить</span><b>${s.rewinds}</b>
           </button>` : ''}
-          <button class="btn btn--primary" data-act="submit-free" ${dead ? 'disabled' : ''}><span>Действовать</span>↵</button>
+          <button class="btn btn--primary" data-act="submit-free" ${dead || finished ? 'disabled' : ''}><span>Действовать</span>↵</button>
         </div>
         <div class="composer__hint">
           <span class="keys-hint">1–6 — варианты · ↑ — прошлые действия · H — лист героя · ? — подсказка</span>
@@ -1003,9 +1024,10 @@ function sheetHTML() {
               .reverse()
               .map((t) => {
                 const total = t.check ? ` · ${t.check.total}/${t.check.dc}` : '';
-                const result = t.check ? (t.check.success ? 'ok' : 'fail') : '';
-                return `<button class="chronicle__item" data-act="goto-turn" data-turn="${t.turn}" data-result="${result}">
-                  <span class="meta">ход ${t.turn}${total}</span>
+                const result = t.check ? (t.check.success ? 'ok' : 'fail') : t.finale ? 'finale' : '';
+                const arcMark = t.arc ? ` · линия ${t.arc.step}/${t.arc.total}` : '';
+                return `<button class="chronicle__item${t.finale ? ' is-finale' : ''}" data-act="goto-turn" data-turn="${t.turn}" data-result="${result}">
+                  <span class="meta">ход ${t.turn}${total}${arcMark}</span>
                   <b>${esc(clampText(t.action, 70))}</b>
                   <span>${esc(clampText((t.narration || '').split(/\n{2,}/)[0], 110))}</span>
                 </button>`;
@@ -1237,12 +1259,22 @@ function finishTurn(payload) {
     );
   }
   if (payload.turn?.leveled) setTimeout(() => showLevelUp(), 1100);
-  if (payload.state.status === 'dead') {
+  if (payload.state.status === 'dead' || payload.state.status === 'finished') {
     const input = document.getElementById('free-action');
     const btn = app.querySelector('[data-act="submit-free"]');
     if (input) input.disabled = true;
     if (btn) btn.disabled = true;
-    setTimeout(() => showDeathOverlay(), 900);
+  }
+  if (payload.state.status === 'dead') setTimeout(() => showDeathOverlay(), 900);
+  const arcEvent = payload.turn?.arc;
+  if (arcEvent) {
+    setTimeout(() => {
+      toast(
+        arcEvent.complete
+          ? `Линия «${arcEvent.title}» пройдена — теперь историю можно закончить.`
+          : `Линия «${arcEvent.title}»: шаг ${arcEvent.step} из ${arcEvent.total}.`
+      );
+    }, 700);
   }
   scrollToBottom();
 }
@@ -1259,9 +1291,15 @@ function renderChoices(s) {
     choices.innerHTML = `<button class="choice" data-act="death-screen" style="grid-column:1/-1"><b>Финал</b>История завершена. Посмотреть эпитафию.</button>`;
     return;
   }
-  choices.innerHTML = (last?.options || [])
-    .map((o, i) => choiceHTML(o, i))
-    .join('');
+  if (s.status === 'finished') {
+    choices.innerHTML = `<button class="choice choice--finale" data-act="finale-screen" style="grid-column:1/-1"><b>Финал</b>История закончена. Прочитать эпилог.</button>`;
+    return;
+  }
+  const options = (last?.options || []).map((o, i) => choiceHTML(o, i)).join('');
+  const finale = s.arc?.complete
+    ? `<button class="choice choice--arc" data-act="open-finale" style="grid-column:1/-1"><b>Развязка</b>Линия пройдена до конца. Закончить историю здесь — или идти дальше.</button>`
+    : '';
+  choices.innerHTML = finale + options;
 }
 
 function submitFree() {
@@ -1518,6 +1556,7 @@ function showHelp() {
       <div class="eyebrow">Подсказка</div>
       <h2>Как играть</h2>
       <p>Ты описываешь действие — мастер отвечает сценой. Кости кидает сервер и только там, где провал что-то меняет: риск, сопротивление, схватка, обман. Обычные действия просто работают — но мир всё равно может ответить. Смерть необратима, но ход можно отмотать назад.</p>
+      <p>У истории есть линия: пять шагов, по которым она идёт. Шаги двигает сервер, когда ты действительно решаешь узел. Пройденная линия открывает финал — им можно закончить историю в любой момент.</p>
       <div class="help-rows">
         ${rows.map(([k, v]) => `<div><kbd>${esc(k)}</kbd><span>${esc(v)}</span></div>`).join('')}
       </div>
@@ -1530,7 +1569,13 @@ function showHelp() {
 }
 
 function rulesText() {
-  return `Режиссура:
+  return `Линия и финал:
+- У мира пять шагов линии; пройденные видны, будущие закрыты.
+- Шаг закрывается за настоящее решение, а не за разговор; два шага подряд не проходят.
+- Пройденная линия открывает «Развязку»: мастер пишет эпилог, история завершается.
+- После финала ход можно отмотать назад и продолжить — если закончил слишком рано.
+
+Режиссура:
 - Сцена заканчивается на новой возможности или новой проблеме, а не на пустом месте.
 - Мир живёт сам: NPC преследуют свои цели, даже когда герой ничего не делает.
 - Каждый ход сдвигает хотя бы одну линию: задание, отношения, угрозу или долг.
@@ -1569,6 +1614,91 @@ function showRules() {
       <div class="overlay__actions">
         <button class="btn" data-act="close-overlay">Закрыть</button>
         <a class="btn btn--ghost" href="/api/games/${esc(s.id)}/export">Скачать хронику</a>
+      </div>
+    </div>
+  </div>`;
+}
+
+function showArcPanel() {
+  const s = store.game;
+  const arc = s?.arc;
+  if (!arc) return toast('У этой истории нет сюжетной линии.', true);
+  overlayRoot.innerHTML = `<div class="overlay" data-act="close-overlay">
+    <div class="overlay__card" data-stop="1">
+      <div class="eyebrow">Сюжетная линия · шаг ${arc.step} из ${arc.total}</div>
+      <h2>${esc(arc.title)}</h2>
+      <ol class="arc-list">
+        ${arc.done.map((st) => `<li class="is-done"><span>${esc(st)}</span><i>пройдено</i></li>`).join('')}
+        ${arc.current ? `<li class="is-current"><span>${esc(arc.current)}</span><i>сейчас</i></li>` : ''}
+        ${Array.from({ length: Math.max(0, arc.left - (arc.current ? 1 : 0)) }, (_, i) => `<li class="is-future"><span>?</span><i>${i === 0 ? 'следующий шаг' : 'дальше'}</i></li>`).join('')}
+      </ol>
+      <p style="font-size:12.5px;color:var(--muted)">
+        Линию двигает сервер — когда ты действительно закрываешь шаг, а не просто разговариваешь.
+        ${arc.complete ? 'Все шаги пройдены: историю можно закончить финалом.' : 'Мастер видит, где ты, но не может перескочить шаг.'}
+      </p>
+      <div class="overlay__actions">
+        <button class="btn btn--ghost" data-act="close-overlay">Закрыть</button>
+        ${arc.complete && s.status === 'active' ? '<button class="btn btn--primary" data-act="open-finale">Закончить историю</button>' : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+async function openFinale() {
+  const s = store.game;
+  if (!s) return;
+  if (!s.arc?.complete) return toast('Линия ещё не пройдена.', true);
+  overlayRoot.innerHTML = `<div class="overlay">
+    <div class="overlay__card">
+      <div class="eyebrow">Развязка</div>
+      <h2>Закончить здесь?</h2>
+      <p>Мастер напишет эпилог: что стало с миром после тебя. Это последняя сцена — продолжить историю будет нельзя. Хронику всегда можно скачать.</p>
+      <div class="overlay__actions">
+        <button class="btn btn--primary" data-act="confirm-finale">Написать финал</button>
+        <button class="btn btn--ghost" data-act="close-overlay">Ещё поиграю</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function runFinale() {
+  const s = store.game;
+  if (!s) return;
+  showThinkingOverlay('Мастер пишет финал', 'Последняя сцена. Обычно это занимает несколько секунд.');
+  try {
+    const data = await api(`/api/games/${s.id}/finale`, { method: 'POST', body: JSON.stringify({}) });
+    store.game = data.state;
+    if (data.demo) toast('Модель не ответила — финал дописал резервный рассказчик.', true);
+    renderPlay();
+    showFinaleOverlay();
+  } catch (err) {
+    hideOverlay();
+    toast(err.message, true);
+  }
+}
+
+function showFinaleOverlay() {
+  const s = store.game;
+  const f = s?.finale;
+  if (!f) return;
+  const arc = s.arc || {};
+  overlayRoot.innerHTML = `<div class="overlay" data-act="close-overlay">
+    <div class="overlay__card overlay__card--finale" data-stop="1">
+      <div class="death-mark death-mark--alive">История окончена</div>
+      <h2>${esc(s.hero.name)}</h2>
+      <p>${esc(f.epitaph || s.hero.archetype)}</p>
+      <div class="epitaph">${nl2p(f.text || 'Мир продолжается без тебя.')}</div>
+      <div class="arc-final">Линия «${esc(arc.title)}» — ${arc.total} из ${arc.total}</div>
+      <div style="display:flex;gap:16px;margin-top:18px;font-size:12px;color:var(--muted);flex-wrap:wrap">
+        <span>Ходов: <b style="color:var(--ink)">${s.logTotal ?? (s.log || []).length}</b></span>
+        <span>Уровень: <b style="color:var(--ink)">${s.hero.level}</b></span>
+        <span>Проверок: <b style="color:var(--ink)">${s.stats.checks}</b></span>
+        <span>Золото: <b style="color:var(--ink)">${s.hero.gold}</b></span>
+      </div>
+      <div class="overlay__actions">
+        <a class="btn btn--primary" href="#/worlds" data-act="close-overlay">Новая история</a>
+        <a class="btn" href="/api/games/${esc(s.id)}/export">Скачать хронику</a>
+        <button class="btn btn--ghost" data-act="close-overlay">Перечитать</button>
       </div>
     </div>
   </div>`;
@@ -1700,7 +1830,7 @@ function archiveFiltered() {
   const a = store.archive;
   const q = a.q.trim().toLowerCase();
   let list = (store.games || []).filter((g) => {
-    if (a.filter === 'alive' && g.status === 'dead') return false;
+    if (a.filter === 'alive' && (g.status === 'dead' || g.status === 'finished')) return false;
     if (a.filter === 'dead' && g.status !== 'dead') return false;
     if (!q) return true;
     const haystack = `${g.heroName || ''} ${g.title || ''} ${g.genre || ''} ${g.difficulty || ''}`.toLowerCase();
@@ -1719,10 +1849,12 @@ function archiveFilterBtn(value, label) {
 
 function archiveCardHTML(g) {
   const dead = g.status === 'dead';
+  const finished = g.status === 'finished';
   const turns = Math.max(0, (g.turn || 1) - 1);
-  return `<article class="archive-card ${dead ? 'is-dead' : ''}">
+  const stateLabel = dead ? 'герой погиб' : finished ? 'история завершена' : 'на паузе';
+  return `<article class="archive-card ${dead ? 'is-dead' : ''} ${finished ? 'is-finished' : ''}">
     <div class="archive-card__cover" style="background-image:url('${esc(g.art || '/art/world-ash.jpg')}')">
-      <span class="archive-card__state">${dead ? 'история окончена' : 'на паузе'}</span>
+      <span class="archive-card__state">${stateLabel}</span>
       <span class="archive-card__turns">${turns} ${plural(turns, ['ход', 'хода', 'ходов'])}</span>
     </div>
     <div class="archive-card__body">
@@ -1738,11 +1870,15 @@ function archiveCardHTML(g) {
         ${g.quests ? `<span>заданий: <b>${esc(g.quests)}</b></span>` : ''}
         ${g.difficulty ? `<span>${esc(g.difficulty)}</span>` : ''}
       </div>
+      ${g.arcTitle ? `<div class="archive-card__arc">
+        <span class="arc-dots">${Array.from({ length: g.arcTotal || 0 }, (_, i) => `<i class="${i < (g.arcStep || 0) ? 'on' : ''}"></i>`).join('')}</span>
+        ${esc(g.arcTitle)}
+      </div>` : ''}
       <div class="archive-card__foot">
         <span class="archive-card__date">${timeAgo(g.updatedAt)}</span>
         <div class="archive-card__actions">
-          <button class="btn btn--small" data-act="open" data-id="${esc(g.id)}">${dead ? 'Открыть' : 'Продолжить'}</button>
-          ${dead ? `<button class="btn btn--ghost btn--small" data-act="fork" data-id="${esc(g.id)}">Ветка</button>` : ''}
+          <button class="btn btn--small" data-act="open" data-id="${esc(g.id)}">${dead ? 'Открыть' : finished ? 'Финал' : 'Продолжить'}</button>
+          ${dead || finished ? `<button class="btn btn--ghost btn--small" data-act="fork" data-id="${esc(g.id)}">Ветка</button>` : ''}
           <a class="btn btn--ghost btn--small" href="/api/games/${esc(g.id)}/export" title="Хроника в Markdown">.md</a>
           <a class="btn btn--ghost btn--small" href="/api/games/${esc(g.id)}/download" title="Скачать сохранение">json</a>
           <button class="btn btn--ghost btn--small btn--danger" data-act="delete" data-id="${esc(g.id)}" title="Удалить">×</button>
@@ -1961,6 +2097,22 @@ app.addEventListener('click', async (e) => {
     showDeathOverlay();
     return;
   }
+  if (act === 'arc-panel') {
+    showArcPanel();
+    return;
+  }
+  if (act === 'open-finale') {
+    openFinale();
+    return;
+  }
+  if (act === 'confirm-finale') {
+    runFinale();
+    return;
+  }
+  if (act === 'finale-screen') {
+    showFinaleOverlay();
+    return;
+  }
   if (act === 'close-overlay') {
     hideOverlay();
     return;
@@ -2037,6 +2189,26 @@ app.addEventListener('click', async (e) => {
 overlayRoot.addEventListener('click', async (e) => {
   const action = e.target.closest('[data-act]');
   const act = action?.dataset.act;
+  if (act === 'confirm-finale') {
+    await runFinale();
+    return;
+  }
+  if (act === 'open-finale') {
+    openFinale();
+    return;
+  }
+  if (act === 'finale-screen') {
+    showFinaleOverlay();
+    return;
+  }
+  if (act === 'arc-panel') {
+    showArcPanel();
+    return;
+  }
+  if (act === 'death-screen') {
+    showDeathOverlay();
+    return;
+  }
   if (act === 'level-choice') {
     await pickLevel(action.dataset.id);
     return;

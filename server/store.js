@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { makeId } from './state.js';
-import { ARCHETYPES } from './worlds.js';
+import { ARCHETYPES, arcForWorld } from './worlds.js';
 
 // Папку сохранений можно увести наружу: .exe кладёт их рядом с собой или в AppData.
 const ROOT = path.resolve(process.env.LORIA_DATA_DIR || 'data');
@@ -53,6 +53,14 @@ export function migrate(state) {
   state.flags = state.flags && typeof state.flags === 'object' ? state.flags : {};
   state.stats = state.stats || { checks: 0, successes: 0, failures: 0, crits: 0, fumbles: 0, deaths: 0, drained: 0 };
   state.scene = state.scene || { location: 'Начало пути', time: 'неизвестно', weather: '', turn: 1, tension: 1 };
+  // Сюжетная линия: старые сохранения получают арку своего мира с нуля.
+  if (!state.arc || !Array.isArray(state.arc.steps) || !state.arc.steps.length) {
+    const arc = arcForWorld(state.world);
+    state.arc = { title: arc.title, steps: arc.steps, step: 0, advancedAt: state.scene.turn || 1, complete: false };
+  }
+  if (state.status === 'finished' && !state.finale) {
+    state.finale = { text: '', epitaph: '', at: state.updatedAt || Date.now(), demo: true, model: null };
+  }
   if (!Array.isArray(state.places)) state.places = [state.scene.location].filter(Boolean);
   return state;
 }
@@ -98,6 +106,9 @@ export async function listGames(limit = 40) {
         worldId: s.world?.id,
         level: s.hero?.level || 1,
         quests: (s.memory?.quests || []).filter((q) => q.status === 'active').length,
+        arcTitle: s.arc?.title || '',
+        arcStep: Number(s.arc?.step) || 0,
+        arcTotal: Array.isArray(s.arc?.steps) ? s.arc.steps.length : 0,
         updatedAt: s.updatedAt || s.createdAt,
         hp: `${s.hero?.hp}/${s.hero?.maxHp}`
       });
@@ -179,7 +190,11 @@ export function exportMarkdown(state) {
   lines.push('');
   lines.push(`**Герой:** ${state.hero.name}, ${state.hero.archetype} · ${state.difficulty.name}`);
   lines.push(`**Мир:** ${state.world.genre} · ходов: ${state.scene.turn - 1}`);
-  lines.push(`**Финал:** ${state.status === 'dead' ? 'смерть' : 'история не закончена'}`);
+  const finaleKind = state.status === 'dead' ? 'смерть' : state.status === 'finished' ? 'финал' : 'история не закончена';
+  lines.push(`**Финал:** ${finaleKind}`);
+  if (state.arc?.title) {
+    lines.push(`**Линия:** «${state.arc.title}» — шаг ${state.arc.step || 0} из ${state.arc.steps?.length || 0}`);
+  }
   lines.push('');
   lines.push('---');
   lines.push('');
@@ -196,6 +211,19 @@ export function exportMarkdown(state) {
     lines.push(`**Действие:** ${entry.action}`);
     lines.push('');
     lines.push(entry.narration);
+    lines.push('');
+  }
+  if (state.status === 'finished' && state.finale?.text) {
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+    lines.push('## Финал');
+    lines.push('');
+    if (state.finale.epitaph) {
+      lines.push(`> ${state.finale.epitaph}`);
+      lines.push('');
+    }
+    lines.push(state.finale.text);
     lines.push('');
   }
   if (state.memory?.facts?.length) {

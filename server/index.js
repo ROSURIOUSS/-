@@ -8,7 +8,7 @@ import { loadEnv } from './env.js';
 loadEnv();
 
 import { aiAvailable, aiConfig, aiStatus, aiKeyInfo, aiDoctorCheck, modelOptions, resetCatalogCache } from './ai.js';
-import { sanitizeAction, noteCheatAttempt, runTurn, startNewGame, forkGame, compactStateMemory, engineStats, isDemo, rest, rewind, levelUp } from './engine.js';
+import { sanitizeAction, noteCheatAttempt, runTurn, startNewGame, forkGame, compactStateMemory, engineStats, isDemo, rest, rewind, levelUp, runFinale } from './engine.js';
 import { applySettings, saveSettings, readSettings, maskedKey } from './settings.js';
 import { publicState, levelChoices } from './state.js';
 import { PRESETS, ARCHETYPES, TRAITS, BURDENS, DIFFICULTIES } from './worlds.js';
@@ -247,7 +247,9 @@ async function handleApi(req, res, url) {
         rules: w.rules,
         start: w.start,
         opening: w.opening,
-        tone: w.tone
+        tone: w.tone,
+        arcTitle: w.arc?.title || '',
+        arcLength: w.arc?.steps?.length || 5
       })),
       archetypes: ARCHETYPES,
       traits: TRAITS,
@@ -370,6 +372,7 @@ async function handleApi(req, res, url) {
       return json(res, 400, { error: e.message });
     }
     if (state.status === 'dead') return json(res, 409, { error: 'История завершена: герой мёртв.', dead: true });
+    if (state.status === 'finished') return json(res, 409, { error: 'История завершена финалом.', finished: true });
 
     const sanitized = sanitizeAction(body.action);
     if (sanitized.error) return json(res, 400, { error: sanitized.error });
@@ -436,6 +439,55 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === 'POST' && tail === 'finale') {
+    if (state.status === 'dead') return json(res, 409, { error: 'История закончена смертью — финала не будет.', dead: true });
+    if (!state.arc?.complete) {
+      return json(res, 400, {
+        error: `Линия ещё не пройдена: шаг ${(state.arc?.step || 0) + 1} из ${state.arc?.steps?.length || 0}.`,
+        arc: publicState(state).arc
+      });
+    }
+    if (locks.has(id)) return json(res, 429, { error: 'Мастер ещё завершает сцену.' });
+    locks.add(id);
+    try {
+      const wantsStream = String(req.headers.accept || '').includes('text/event-stream');
+      if (!wantsStream) {
+        const result = await runFinale(state, () => {});
+        return json(res, 200, {
+          state: publicState(result.state),
+          finale: result.finale,
+          demo: result.demo,
+          aiError: result.aiError,
+          ai: result.ai || null
+        });
+      }
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no'
+      });
+      const send = (event, data) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+      const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+      send('phase', { phase: 'thinking' });
+      try {
+        const result = await runFinale(state, (phase) => send('phase', { phase }));
+        send('done', { state: publicState(result.state), finale: result.finale, demo: result.demo, aiError: result.aiError, ai: result.ai || null });
+      } catch (err) {
+        send('error', { message: err?.message || 'Финал не получился' });
+      } finally {
+        clearInterval(heartbeat);
+        res.end();
+      }
+    } finally {
+      locks.delete(id);
+    }
+    return;
+  }
+
   if (req.method === 'GET' && tail === 'levels') {
     return json(res, 200, { level: state.hero.level, xp: state.hero.xp, next: 10 * state.hero.level, choices: levelChoices(state.hero) });
   }
@@ -466,6 +518,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'POST' && tail === 'rest') {
     if (state.status === 'dead') return json(res, 409, { error: 'История завершена.', dead: true });
+    if (state.status === 'finished') return json(res, 409, { error: 'История завершена финалом.', finished: true });
     const result = await rest(state);
     if (result.error) return json(res, 400, { error: result.error });
     return json(res, 200, { state: publicState(result.state) });

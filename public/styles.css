@@ -443,6 +443,21 @@ button { cursor: pointer; }
   background: linear-gradient(90deg, transparent, var(--line), transparent);
 }
 .turn__action b { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 500; white-space: nowrap; }
+.turn--finale {
+  border-top: 1px solid var(--accent);
+  padding-top: 22px;
+  margin-top: 8px;
+}
+.turn--finale .narration { font-size: 16.5px; line-height: 1.85; }
+.turn__epitaph {
+  font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent);
+  margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line);
+}
+.turn__arc {
+  font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+  margin: -4px 0 12px; padding-left: 10px; border-left: 2px solid var(--accent);
+}
+.tag--finale { color: var(--accent); border-color: var(--accent); }
 .turn__free {
   font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted);
   border-left: 2px solid var(--line-strong); padding: 2px 0 2px 10px; margin: -4px 0 12px;
@@ -582,6 +597,8 @@ button { cursor: pointer; }
 .audit-item[data-kind="audit"][data-severity="hard"] { border-color: var(--blood); color: #e2b0a8; }
 .audit-item[data-kind="ai-audit"] { border-color: #5e7f9c; }
 .audit-item[data-kind="ai-error"] { border-color: var(--blood); color: #e2b0a8; }
+.audit-item[data-kind="arc"], .audit-item[data-kind="arc-final"] { border-color: #6f8f7a; color: #b6d3bf; }
+.audit-item[data-kind="finale"] { border-color: var(--accent); color: #e0c3a6; }
 .audit-item .meta { display: block; font-size: 8.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
 
 .sheet-toggle { display: none; }
@@ -735,6 +752,12 @@ button { cursor: pointer; }
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   border-top: 1px solid var(--line); padding-top: 10px; margin-top: 2px; flex-wrap: wrap;
 }
+.archive-card__arc {
+  display: flex; align-items: center; gap: 8px; margin-top: 8px;
+  font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+}
+.archive-card.is-finished .archive-card__cover { filter: saturate(0.75) brightness(0.95); }
+.archive-card.is-finished .archive-card__state { color: var(--accent); }
 .archive-card__date { font-size: 10.5px; color: var(--muted); }
 .archive-card__actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .archive-card__actions .btn { text-decoration: none; }
@@ -748,6 +771,8 @@ button { cursor: pointer; }
 /* ---------- хроника ходов ---------- */
 
 .chronicle { display: grid; gap: 6px; max-height: min(62vh, 560px); overflow: auto; padding-right: 4px; }
+.chronicle__item.is-finale { border-color: var(--accent); }
+.chronicle__item.is-finale .meta { color: var(--accent); }
 .chronicle__item {
   display: grid; gap: 3px; text-align: left; padding: 9px 11px; border-radius: 3px;
   border: 1px solid var(--line); border-left: 2px solid var(--line-strong);
@@ -778,6 +803,41 @@ button { cursor: pointer; }
 .rules-more[open] summary::before { content: '–'; }
 .rules-more summary:hover { color: var(--ink); }
 .rules-more p { color: var(--ink-dim); margin: 4px 0 8px; }
+/* Сюжетная линия */
+.chip--arc {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: inherit; color: var(--ink-dim); cursor: pointer;
+  border-color: var(--line-strong); background: transparent;
+}
+.chip--arc:hover { color: var(--ink); border-color: var(--accent); }
+.chip--arc.is-complete { color: var(--accent); border-color: var(--accent); }
+.arc-dots { display: inline-flex; gap: 3px; }
+.arc-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--line-strong); display: block; }
+.arc-dots i.on { background: var(--accent); }
+
+.arc-list { list-style: none; margin: 16px 0 14px; padding: 0; display: grid; gap: 6px; }
+.arc-list li {
+  display: flex; justify-content: space-between; gap: 14px; align-items: baseline;
+  padding: 9px 12px; border-left: 2px solid var(--line-strong); background: rgba(255,255,255,0.02);
+}
+.arc-list li span { font-size: 13.5px; color: var(--ink-dim); }
+.arc-list li i { font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-style: normal; white-space: nowrap; }
+.arc-list li.is-done { border-left-color: var(--good); }
+.arc-list li.is-done span { color: var(--muted); }
+.arc-list li.is-current { border-left-color: var(--accent); }
+.arc-list li.is-current span { color: var(--ink); }
+.arc-list li.is-current i { color: var(--accent); }
+.arc-list li.is-future span { color: var(--muted); }
+
+.choice--arc { border-color: var(--accent) !important; background: linear-gradient(90deg, rgba(201,129,74,0.14), transparent 70%) !important; }
+.choice--arc b { color: var(--accent) !important; }
+.choice--finale b { color: var(--good) !important; }
+.death-mark--alive { color: var(--accent); }
+.arc-final {
+  margin-top: 16px; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted);
+}
+.overlay__card--finale .epitaph { font-size: 16px; line-height: 1.8; }
+
 .help-rows { display: grid; gap: 2px; margin: 18px 0 22px; }
 .help-rows > div {
   display: grid; grid-template-columns: 92px 1fr; gap: 14px; align-items: center;

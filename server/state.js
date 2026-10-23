@@ -1,7 +1,7 @@
 // Состояние игры: герой, сцена, память, аудит.
 // Всё, что меняет цифры, проходит через аудитора state.js — модель только предлагает.
 
-import { DIFFICULTIES, detectSystem, getPreset, makeCustomWorld, ARCHETYPES, TRAITS, BURDENS } from './worlds.js';
+import { DIFFICULTIES, detectSystem, getPreset, makeCustomWorld, ARCHETYPES, TRAITS, BURDENS, arcForWorld } from './worlds.js';
 import { STATS, guessStat, rollCheck, resolveCheck, systemInfo, actionDifficulty } from './dice.js';
 
 export function makeId(len = 10) {
@@ -61,6 +61,9 @@ export function createGame({ worldId, customWorld, hero: heroInput, difficulty =
   hero.hp = hero.maxHp;
 
   const system = detectSystem(world.rules);
+  // Шаги арки не уезжают в браузер вместе с миром: клиент видит только текущий шаг.
+  const { arc: worldArc, ...worldClean } = world;
+  const arc = arcForWorld(world);
   const now = Date.now();
   return {
     id: makeId(12),
@@ -69,9 +72,10 @@ export function createGame({ worldId, customWorld, hero: heroInput, difficulty =
     seed: Math.floor(Math.random() * 1e9),
     version: 1,
     status: 'active',
-    world: { ...world, system },
+    world: { ...worldClean, system },
     difficulty: { id: diff.id, name: diff.name, desc: diff.desc },
     system,
+    arc: { title: arc.title, steps: arc.steps, step: 0, advancedAt: 1, complete: false },
     hero,
     places: [world.place || 'Начало пути'],
     scene: {
@@ -89,6 +93,42 @@ export function createGame({ worldId, customWorld, hero: heroInput, difficulty =
     audit: [],
     pendingOpening: true
   };
+}
+
+/**
+ * Двигает сюжетную линию на шаг вперёд. Только сервер: модель лишь просит,
+ * а решение принимает движок (не больше шага за ход, никогда назад).
+ */
+export function advanceArc(state, { reason = '' } = {}) {
+  const arc = state.arc;
+  if (!arc || !Array.isArray(arc.steps) || !arc.steps.length) return { advanced: false };
+  if (arc.complete || arc.step >= arc.steps.length) return { advanced: false };
+  arc.step = Math.min(arc.steps.length, (arc.step || 0) + 1);
+  arc.advancedAt = state.scene?.turn || 1;
+  if (arc.step >= arc.steps.length) arc.complete = true;
+  return {
+    advanced: true,
+    step: arc.step,
+    total: arc.steps.length,
+    stepName: arc.steps[arc.step - 1],
+    complete: Boolean(arc.complete),
+    reason
+  };
+}
+
+/** Открытый финал: история закончена не смертью, а развязкой. */
+export function finishGame(state, { text, epitaph = '', demo = false, model = null }) {
+  state.status = 'finished';
+  state.hero.alive = true;
+  state.finale = {
+    text: str(text, 8000),
+    epitaph: str(epitaph, 240),
+    at: Date.now(),
+    demo: Boolean(demo),
+    model: model ? str(model, 120) : null
+  };
+  state.updatedAt = Date.now();
+  return state;
 }
 
 /** Собирает броско́к под основное рискованное действие хода. */
@@ -159,7 +199,7 @@ export function levelChoices(hero) {
  */
 export function awardExperience(state, roll) {
   const hero = state.hero;
-  if (!hero || state.status === 'dead') return { gained: 0 };
+  if (!hero || state.status === 'dead' || state.status === 'finished') return { gained: 0 };
   // Ход без броска — тоже прожитая сцена: немного опыта за выживание, но без бонусов.
   if (!roll) {
     hero.xp = (hero.xp || 0) + 1;
@@ -228,6 +268,7 @@ export function applyLevelUp(state, choiceId) {
 export function restHero(state) {
   const hero = state.hero;
   if (state.status === 'dead') return { error: 'Герой мёртв.' };
+  if (state.status === 'finished') return { error: 'История уже завершена.' };
   if (hero.energy < 6) return { error: 'Не хватает энергии даже на передышку.' };
   const fullHp = hero.hp >= hero.maxHp && hero.conditions.length === 0;
   const boostReady = (hero.boosts || 0) >= (hero.maxBoosts || 1);
@@ -450,11 +491,25 @@ export function heroSummary(hero) {
 
 /** Публичное представление состояния для клиента. */
 export function publicState(state) {
-  const { log, audit, snapshots, ...rest } = state;
+  const { log, audit, snapshots, arc, ...rest } = state;
   const full = Array.isArray(log) ? log : [];
   const from = Math.max(0, full.length - 60);
+  const steps = Array.isArray(arc?.steps) ? arc.steps : [];
+  const step = Math.max(0, Math.min(steps.length, Number(arc?.step) || 0));
   return {
     ...rest,
+    // Будущие шаги не отдаём: игрок узнаёт их по ходу истории.
+    arc: arc
+      ? {
+          title: arc.title,
+          step,
+          total: steps.length,
+          current: steps[step] || null,
+          done: steps.slice(0, step),
+          complete: Boolean(arc.complete) || step >= steps.length,
+          left: Math.max(0, steps.length - step)
+        }
+      : null,
     rewinds: Array.isArray(snapshots) ? snapshots.length : 0,
     // В браузер уходят последние 60 ходов, но старые можно догрузить по /turns.
     log: full.slice(-60),

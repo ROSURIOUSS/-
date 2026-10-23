@@ -224,6 +224,10 @@ export function demoTurn(state, { action, roll }) {
     ? { text: `${state.hero.name} сделал передышку в «${state.scene.location}» на ходу ${state.scene.turn}.`, importance: 1, pinned: false }
     : { text: `Ход ${state.scene.turn}: «${action.slice(0, 100)}» — ${roll ? roll.verdict : 'без броска'}.`, importance: 1, pinned: false };
 
+  // Резервный рассказчик тоже двигает линию: каждые три успешных хода.
+  const turn = state.scene.turn || 1;
+  if (ok && turn > 1 && turn % 3 === 0) deltas.arc = 1;
+
   return {
     narration,
     options: ok
@@ -235,6 +239,25 @@ export function demoTurn(state, { action, roll }) {
     dead: false,
     demo: true
   };
+}
+
+export function demoFinale(state) {
+  const w = state.world;
+  const hero = state.hero;
+  const step = state.arc?.steps?.[state.arc.steps.length - 1] || 'дойти до конца';
+  const facts = (state.memory?.facts || []).map((f) => String(f.text || '')).filter((t) => t && !/^Ход \d+/.test(t));
+  const lastFact = facts.slice(-1)[0] || '';
+  const npc = (state.memory?.npcs || []).slice(-1)[0];
+  return (
+    `${pick(SENSES[w.title] || FALLBACK_SENSES)}\n\n` +
+    `Ты стоишь там, где всё началось, и место не изменилось — изменился ты. «${w.title}» отпускает не сразу: ` +
+    `последнее, что он делает, — проверяет, готов ли ты уйти.\n\n` +
+    `${lastFact ? `${lastFact.charAt(0).toUpperCase()}${lastFact.slice(1)}. ` : ''}` +
+    `${npc?.name ? `${npc.name} останется здесь — с тем, что ты оставил после себя. ` : ''}` +
+    `${hero.name} сделал то, за чем пришёл: «${step}». Дальше — не твоя сцена. ` +
+    `Кто-то другой войдёт в эти декорации и не будет знать, что здесь было.\n\n` +
+    `Мир не благодарит и не прощает. Он просто продолжается — уже без тебя.`
+  );
 }
 
 export function demoDeath(state) {
