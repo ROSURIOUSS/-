@@ -269,6 +269,11 @@ function heroText(state) {
     `Состояния: ${esc(h.conditions.join(', ') || 'нет')}\n\n` +
     `🎒 ${esc(h.items.join(', ') || 'пусто')}\n\n` +
     `Уровень ${h.level || 1} · опыт ${h.xp || 0}/${10 * (h.level || 1)}\n` +
+    (state.arc?.title
+      ? `Линия «${esc(state.arc.title)}»: ${state.arc.step || 0}/${state.arc.steps?.length || 0}${
+          state.arc.complete ? ' — пройдена' : ''
+        }\n`
+      : '') +
     `Проверок: ${state.stats.checks} · успехов ${state.stats.successes} · критов ${state.stats.crits}`
   );
 }
@@ -366,7 +371,7 @@ async function makeTurn(chatId, action) {
   const boost = Boolean(s.boostArmed);
   const state = s.gameId ? await loadGame(s.gameId) : null;
   if (!state) return send(chatId, 'Истории пока нет. /new — начать.');
-  if (state.status === 'dead') {
+  if (state.status === 'dead' || state.status === 'finished') {
     return send(chatId, 'История уже закончена. /new — начать новую.', optionsKeyboard(state));
   }
   if (locks.has(chatId)) return send(chatId, 'Мастер ещё дописывает предыдущий ход.');
@@ -563,7 +568,7 @@ export async function handleUpdate(update) {
       if (data === 'hero') return send(chatId, heroText(state));
       if (data === 'audit') return runAudit(chatId);
       if (data === 'boost') {
-        if (state.status === 'dead') return send(chatId, 'История закончена. /new');
+        if (state.status === 'dead' || state.status === 'finished') return send(chatId, 'История закончена. /new');
         const ready = state.hero.boosts > 0;
         if (!ready) return send(chatId, '⚡ Рывок израсходован. Восстановится после передышки — на сайте это кнопка «Передышка».');
         const nowArmed = !s.boostArmed;

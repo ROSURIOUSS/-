@@ -95,6 +95,19 @@ await test('спокойный текст двигает историю без �
   assert.doesNotMatch(text, /против \d+/);
 });
 
+await test('линия истории видна в сцене и в листе героя', async () => {
+  await handleUpdate(msg('/hero'));
+  const text = findText(/Линия/);
+  assert.match(text, /Линия «/);
+  assert.match(text, /\d+\/\d+/);
+});
+
+await test('финал закрыт, пока линия не пройдена', async () => {
+  await handleUpdate(callback('finale'));
+  const text = findText(/Финал ещё закрыт/);
+  assert.match(text, /шаг \d+ из \d+/);
+});
+
 await test('рискованный текст двигает историю с броском', async () => {
   await handleUpdate(msg('Крадусь вдоль частокола'));
   const text = findText(/ход 3/);

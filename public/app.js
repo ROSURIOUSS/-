@@ -2237,7 +2237,7 @@ overlayRoot.addEventListener('click', async (e) => {
 function syncActionButtons() {
   const g = store.game;
   const form = document.querySelector('.free-form');
-  if (!g || !form || g.status === 'dead') return;
+  if (!g || !form || g.status === 'dead' || g.status === 'finished') return;
   const hero = g.hero;
 
   let boost = form.querySelector('[data-act="toggle-boost"]');
@@ -2272,7 +2272,7 @@ function rerenderComposer() {
   const composer = document.getElementById('composer');
   if (!composer || !store.game) return;
   const hero = store.game.hero;
-  const dead = store.game.status === 'dead';
+  const dead = store.game.status === 'dead' || store.game.status === 'finished';
   const boostBtn = composer.querySelector('[data-act="toggle-boost"]');
   if (boostBtn) {
     boostBtn.classList.toggle('is-armed', store.boostArmed);
