@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "gameVersion": "0.6.0",
+  "method": "static-read-only",
+  "fingerprints": {
+    "package.json": "832a2791697156e50e9383b65418f9dc100839f381e3d7d1abba0b3dc58d5ee2",
+    "main.js": "c932a416c3b53f2b425eb9f9d3d398aee518ce6345b9c0b30e8607a4c5802aa1",
+    "preload.js": "d432f488e4b7a9e0f232ea8cf3a801a6601eda84a1cf5d355e6e75bf1e2bfb6e",
+    "dist/js/bundle.js": "33bd25f60028f6b0dd7f3c27d1fb7b7d1bd3e6d290af91ccf39a60e96c4aba89",
+    "dist/js/simulation-worker.js": "afffd2755321756db7db4d59efb18965aefe653b94567a5d8e43dd377706240b",
+    "dist/js/external-mod-worker-runtime.js": "26c94cbf30223ca51e1a5288d0e2f2559437abb1cdfe7a54eacd5592e8151e6d"
+  },
+  "signatures": {
+    "steamOnlyLocalMods": true,
+    "steamOnlyDiscovery": true,
+    "localModsPreloadBridge": true,
+    "workerSandkitEntry": true,
+    "mainSandkitFacade": true,
+    "elementTeleport": true,
+    "elementDataFields": true,
+    "elementVelocity": true,
+    "elementDuration": true
+  },
+  "gamePassModReady": false,
+  "limitations": [
+    "Static source signatures do not verify runtime compatibility.",
+    "No game code executed; no files or saves modified.",
+    "No verified Game Pass entry point or complete cargo serialization adapter."
+  ]
+}

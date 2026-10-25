@@ -1,0 +1,7 @@
+node_modules/
+.local/
+google_drive/
+# Generated downloads may contain private worlds, locations, and save data.
+# Keep deliverables available locally, but never publish them to Git.
+deliverables/
+__pycache__/
