@@ -171,7 +171,7 @@ class SaveCompatibilityTests(unittest.TestCase):
         for _ in range(32):
             world.step()
         data = json.loads(json.dumps(pack(world, True, 5)))
-        self.assertEqual(data["format"], 7)
+        self.assertEqual(data["format"], 8)
         restored, paused, speed = unpack(data)
         self.assertTrue(paused)
         self.assertEqual(speed, 5)
@@ -207,7 +207,7 @@ class SaveCompatibilityTests(unittest.TestCase):
         for point in data["history"]:
             del point["herbivores"], point["carnivores"]
         extra = ("diet", "speed", "size", "vision", "health", "kills", "memory",
-                 "elongation", "armor", "lineage", "lineage_complete", "foraging")
+                 "elongation", "armor", "lineage", "lineage_complete", "foraging", "experience")
         legacy_weights = [math.sin(i) * 0.3 for i in range(140)]
         for record in data["creatures"]:
             for key in extra:

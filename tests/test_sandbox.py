@@ -334,7 +334,7 @@ class SandboxTests(unittest.TestCase):
         for field in ("leaves", "seeds", "observations"):
             old.pop(field, None)
         for record in old["creatures"]:
-            for key in ("elongation", "armor", "lineage", "lineage_complete", "foraging"):
+            for key in ("elongation", "armor", "lineage", "lineage_complete", "foraging", "experience"):
                 del record[key]
         for field in ("introduced", "temperature_bias", "moisture", "rain_bias"):
             del old[field]
@@ -372,7 +372,7 @@ class SandboxTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT / "simulator/worker.py")], input=text,
                                 text=True, capture_output=True, cwd=ROOT, timeout=15, check=True)
         packets = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(packets[0], {"type": "ready", "protocol": 9})
+        self.assertEqual(packets[0], {"type": "ready", "protocol": 10})
         self.assertTrue(all(packet["ok"] for packet in packets[1:]))
         before, painted, stepped, undone = [packet["state"] for packet in packets[1:5]]
         self.assertNotEqual(before["temperature_bias"], painted["temperature_bias"])

@@ -10,6 +10,7 @@ import tempfile
 from dataclasses import asdict, fields
 from pathlib import Path
 
+from .intelligence import new_experience, validate_experience
 from .behavior import validate_observations
 from .weather import initial_moisture
 from .world import Config, Creature, DIETS, HEIGHT, HIDDEN, MAX_POPULATION, WEIGHTS, WIDTH, World, environment_fields
@@ -37,7 +38,7 @@ def array(value, length):
 
 
 def pack(world: World, paused: bool, speed: int) -> dict:
-    return {"format": 7, "config": asdict(world.config), "day": world.day,
+    return {"format": 8, "config": asdict(world.config), "day": world.day,
             "births": world.births, "deaths": world.deaths, "next_id": world.next_id,
             "introduced": world.introduced, "temperature_bias": world.temperature_bias,
             "moisture": world.moisture, "rain_bias": world.rain_bias,
@@ -91,7 +92,7 @@ def migrate_v4(data: dict) -> dict:
     records = upgraded["creatures"]
     if not isinstance(records, list) or len(records) > MAX_POPULATION:
         raise ValueError("Неверная популяция старого мира")
-    legacy_fields = {item.name for item in fields(Creature)} - MORPHOLOGY_FIELDS - {"foraging"}
+    legacy_fields = {item.name for item in fields(Creature)} - MORPHOLOGY_FIELDS - {"foraging", "experience"}
     by_id = {}
     for record in records:
         if not isinstance(record, dict) or record.keys() != legacy_fields:
@@ -114,7 +115,7 @@ def migrate_v4(data: dict) -> dict:
 
 def unpack(data: dict) -> tuple[World, bool, int]:
     try:
-        if not isinstance(data, dict) or type(data.get("format")) is not int or data["format"] not in (1, 2, 3, 4, 5, 6, 7):
+        if not isinstance(data, dict) or type(data.get("format")) is not int or data["format"] not in (1, 2, 3, 4, 5, 6, 7, 8):
             raise ValueError("Неизвестный формат сохранения")
         if data["format"] == 1:
             data = migrate_v1(data)
@@ -172,6 +173,10 @@ def unpack(data: dict) -> tuple[World, bool, int]:
         else:
             world.leaves = [float(number(v, 0, 1)) for v in array(data["leaves"], WIDTH * HEIGHT)]
             world.seeds = [float(number(v, 0, 1)) for v in array(data["seeds"], WIDTH * HEIGHT)]
+        if data["format"] <= 7:
+            data = copy.deepcopy(data)
+            for record in data["creatures"]:
+                record["experience"] = new_experience()
         world.refresh_weather()
         world.land_tiles = [i for i in range(WIDTH * HEIGHT) if world.land(i)]
         if not world.land_tiles:
@@ -192,6 +197,7 @@ def unpack(data: dict) -> tuple[World, bool, int]:
             if not isinstance(record, dict) or record.keys() != creature_fields:
                 raise ValueError("Неверная запись существа")
             c = Creature(**record)
+            c.experience = validate_experience(c.experience)
             integer(c.id, 1, world.next_id - 1)
             if c.id in ids:
                 raise ValueError("Повторяющийся ID существа")

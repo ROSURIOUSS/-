@@ -180,6 +180,7 @@ class FeedingTests(unittest.TestCase):
         del data['leaves'], data['seeds']
         for c in data['creatures']:
             del c['foraging']
+            del c['experience']
         for record in data['observations']:
             del record['meal']
         before = copy.deepcopy(data)
@@ -194,7 +195,7 @@ class FeedingTests(unittest.TestCase):
         self.assertTrue(all(r['meal'] is None for r in restored.observations.values()))
         restored.step()
         self.assertGreater(sum(restored.leaves), 0)
-        self.assertEqual(payload(restored)['format'], 7)
+        self.assertEqual(payload(restored)['format'], 8)
 
     def test_current_save_and_autocopy_recover_exact_future(self):
         sim = Simulation()

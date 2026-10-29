@@ -473,6 +473,9 @@ func update_inspector() -> void:
 			inspector.text += "\nПищеварение: %s · ген %.2f" % [specialization if creature["diet"] == "herbivore" else "Хищник / падальщик", forage]
 			var local_food: Dictionary = creature["local_food"]
 			inspector.text += "\nЗдесь: трава %.0f%% · листва %.0f%%\nСемена %.0f%% · останки %.2f" % [float(local_food["grass"]) * 100, float(local_food["leaves"]) * 100, float(local_food["seeds"]) * 100, float(local_food["carrion"])]
+			var intelligence: Dictionary = creature["intelligence"]
+			inspector.text += "\n\nИНДИВИДУАЛЬНОЕ ОБУЧЕНИЕ · %s\nОпыт: %d шагов · Обратная связь %+.3f\nСредняя награда %+.3f · Изменение слоя %.3f" % ["включено" if intelligence["enabled"] else "выключено", int(intelligence["updates"]), float(intelligence["reward"]), float(intelligence["baseline"]), float(intelligence["adaptation"])]
+			inspector.text += "\nУ каждого своя сеть, память и обучаемый слой.\nИзменение слоя — не оценка разума."
 			inspector.text += behavior_text(creature)
 			neural_activity.activations = creature["memory"]
 			neural_activity.queue_redraw()

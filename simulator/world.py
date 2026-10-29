@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import random
+from .intelligence import new_experience, act, learn, outcome_reward, summary as intelligence_summary
 from .feeding import LABELS, advance_forage, initial_forage, food_signal, take_meal
 from .behavior import public_observation
 from .weather import advance_moisture, initial_moisture, weather_field
@@ -104,6 +105,7 @@ class Creature:
     lineage: int = 0
     lineage_complete: bool = True
     memory: list[float] = field(default_factory=lambda: [0.0] * HIDDEN)
+    experience: dict = field(default_factory=new_experience)
 
     @property
     def mobility(self) -> float:
@@ -123,8 +125,8 @@ class Creature:
         self.memory = hidden
         output = []
         for offset in range(HIDDEN * stride, WEIGHTS, HIDDEN + 1):
-            output.append(math.tanh(_dot(hidden, brain[offset:offset + HIDDEN]) + brain[offset + HIDDEN]))
-        return output
+            output.append(_dot(hidden, brain[offset:offset + HIDDEN]) + brain[offset + HIDDEN])
+        return act(self.experience, inputs, hidden, output)
 
 
 class SpatialIndex:
@@ -352,6 +354,7 @@ class World:
             self.meat[tile] = min(3.0, self.meat[tile] + c.size * 0.25 + max(0, c.energy) / 500)
             c.health = 0.0
 
+        outcomes = {c.id: (c.energy, c.health, c.children) for c in self.creatures}
         for c in self.creatures:
             if c.id in dead:
                 continue
@@ -431,6 +434,14 @@ class World:
                 if child.generation > highest_generation:
                     highest_generation = child.generation
                     self.events.append(f"День {int(self.day)}: появилось поколение {child.generation}.")
+        # Settle after EVERY creature has acted, including attacks on earlier actors.
+        for c in self.creatures:
+            if c.id in self.observations:
+                energy, health, children = outcomes[c.id]
+                reward = outcome_reward(energy, c.energy, health, c.health,
+                                        self.observations[c.id]["blocked"], c.children - children,
+                                        88 if c.diet == "carnivore" else 68)
+                learn(c.experience, reward)
         self.creatures = [c for c in self.creatures if c.id not in dead] + babies
         self.observations = {c.id: self.observations[c.id] for c in self.creatures if c.id in self.observations}
         counts = self.counts()
@@ -504,6 +515,7 @@ class World:
                       "local_rain": round(self.precipitation[self.tile(c.x, c.y)], 3),
                       "elongation": round(c.elongation, 3), "armor": round(c.armor, 3),
                       "foraging": round(c.foraging, 3),
+                      "intelligence": intelligence_summary(c.experience),
                       "local_food": {"grass": round(self.food[self.tile(c.x, c.y)], 3),
                                      "leaves": round(self.leaves[self.tile(c.x, c.y)], 3),
                                      "seeds": round(self.seeds[self.tile(c.x, c.y)], 3),

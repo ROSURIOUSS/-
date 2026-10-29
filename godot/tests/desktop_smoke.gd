@@ -255,6 +255,22 @@ func _run() -> void:
 			inspected_network = true
 			break
 	assert(inspected_network, "Inspect a real neural decision, not just the empty-state label")
+	assert(app.inspector.text.contains("ИНДИВИДУАЛЬНОЕ ОБУЧЕНИЕ"))
+	for intelligent: Dictionary in app.snapshot["creatures"]:
+		assert(intelligent["intelligence"]["enabled"])
+		if intelligent["age"] > 0:
+			assert(int(intelligent["intelligence"]["updates"]) > 0)
+	# A second step must actually update an individual's adaptive neural weights.
+	var trained_day := float(app.snapshot["day"])
+	app.send_command("single_step", {})
+	deadline = Time.get_ticks_msec() + 15000
+	while float(app.snapshot["day"]) <= trained_day and Time.get_ticks_msec() < deadline:
+		await process_frame
+	var adapted := false
+	for intelligent: Dictionary in app.snapshot["creatures"]:
+		if float(intelligent["intelligence"]["adaptation"]) > 0:
+			adapted = true
+	assert(adapted, "Real individuals must learn, not just increment an experience label")
 	var inspected_meal := false
 	for fed: Dictionary in app.snapshot["creatures"]:
 		var decision = fed.get("behavior")
@@ -351,7 +367,7 @@ func _run() -> void:
 	DirAccess.remove_absolute(backup_folder)
 	DirAccess.remove_absolute(test_preferences)
 	DirAccess.remove_absolute(session_root)
-	print("PASS: planet, meshes, layers, zoom, bundled core, sandbox IPC/undo/step, body genes, lineage follow, weather, desktop toolbox, autosave timer/rotation/selection/restart consent, forage textures/plants/layers/real meal, shutdown")
+	print("PASS: planet, meshes, layers, zoom, bundled core, sandbox IPC/undo/step, body genes, lineage follow, weather, desktop toolbox, autosave timer/rotation/selection/restart consent, forage textures/plants/layers/real meal, individual neural learning, shutdown")
 	quit(0)
 
 func _capture(view: PlanetView, folder: String, name: String) -> void:
