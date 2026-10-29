@@ -93,7 +93,7 @@ class SuccessionTests(unittest.TestCase):
         for _ in range(24):
             a.step()
         payload = json.loads(json.dumps(pack(a, False, 1)))
-        self.assertEqual(payload["format"], 8)
+        self.assertEqual(payload["format"], 9)
         b, _, _ = unpack(payload)
         for _ in range(24):
             a.step()
@@ -152,7 +152,7 @@ class BundledCoreTests(unittest.TestCase):
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
             packets = [json.loads(line) for line in result.stdout.splitlines()]
-            self.assertEqual(packets[0]["protocol"], 10)
+            self.assertEqual(packets[0]["protocol"], 11)
             self.assertTrue(packets[1]["ok"])
             self.assertIn("canopy", packets[1]["state"])
             self.assertIn("ecosystem", packets[1]["state"])

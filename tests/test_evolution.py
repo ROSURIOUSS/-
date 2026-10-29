@@ -234,7 +234,7 @@ class BodySaveTests(unittest.TestCase):
         sim.world.creatures[0].armor = 0.9
         sim.world.creatures[1].elongation = 1.65
         before = payload(sim.world)
-        self.assertEqual(before["format"], 8)
+        self.assertEqual(before["format"], 9)
         sim.command("brush", dict(kind="warm", x=40.5, y=24.5))
         sim.command("single_step", {})
         sim.command("undo", {})

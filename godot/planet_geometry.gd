@@ -2,6 +2,7 @@ extends RefCounted
 ## Shared projection for terrain, agents, camera picking, and habitat decorations.
 const RADIUS: float = 6.0
 const RELIEF: float = 0.65
+var relief: float = RELIEF
 var heights: Array = []
 var width: int = 80
 var height: int = 48
@@ -12,7 +13,8 @@ var _south_height: float = 0.42
 func configure(data: Dictionary) -> void:
 	width = int(data["width"])
 	height = int(data["height"])
-	sea = float(data["config"]["sea_level"])
+	sea = float(data.get("surface_sea_level", data["config"]["sea_level"]))
+	relief = float(data["earth"]["relief_m"]) / (float(data["earth"]["radius_m"]) / RADIUS) if data.get("earth") is Dictionary else RELIEF
 	heights = data["elevation"]
 	_north_height = 0.0
 	_south_height = 0.0
@@ -46,7 +48,7 @@ func sample(uv: Vector2) -> float:
 	return lerpf(_north_height if uv.y < 0.5 else _south_height, interpolated, blend)
 
 func radius(uv: Vector2) -> float:
-	return RADIUS + maxf(0, sample(uv) - sea) * RELIEF
+	return RADIUS + maxf(0, sample(uv) - sea) * relief
 
 func point(uv: Vector2, lift: float = 0.0) -> Vector3:
 	return direction(uv) * (radius(uv) + lift)

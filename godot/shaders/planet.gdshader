@@ -9,6 +9,8 @@ uniform float sea_level = 0.42;
 uniform float temperature = 18.0;
 uniform float rainfall = 0.65;
 uniform int layer = 0;
+uniform bool earth_mode = false;
+uniform float earth_heat = 0.0;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
     vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
@@ -49,6 +51,11 @@ void fragment() {
         if(layer==3) color=mix(vec3(0.07,0.13,0.10),vec3(0.95,0.47,0.22),clamp(habitat.a*3.0,0.0,1.0));
         if(layer==5) color=mix(vec3(0.72,0.36,0.12),vec3(0.08,0.55,0.78),moisture);
         if(layer==4) color=mix(vec3(0.42,0.20,0.09),vec3(0.38,0.84,0.48),soil);
+    }
+    if(earth_mode && h>sea_level && layer==0) {
+        float cracks=smoothstep(0.48,0.74,grain);
+        color=mix(vec3(0.13,0.12,0.11)*(0.8+grain*0.5),vec3(0.95,0.18,0.015),earth_heat*(0.45+cracks*0.55));
+        EMISSION=vec3(1.0,0.12,0.005)*earth_heat*cracks*1.4;
     }
     if(layer==2) color=mix(vec3(0.12,0.40,0.80),vec3(0.90,0.27,0.10),clamp((t+15.0)/60.0,0.0,1.0));
     if(layer==6) color=mix(vec3(0.13,0.15,0.20),vec3(0.20,0.75,1.0),weather.g);

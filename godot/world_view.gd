@@ -26,6 +26,7 @@ var _viewport: SubViewport
 var _scene: Node3D
 var _camera: Camera3D
 var _ground: MeshInstance3D
+var _atmosphere: MeshInstance3D
 var _clouds: MeshInstance3D
 var _ground_material: ShaderMaterial
 var _cloud_material: ShaderMaterial
@@ -143,7 +144,7 @@ func _build_scene() -> void:
 	_scene.add_child(_ground)
 	_clouds = _shell(6.62, CLOUD_SHADER)
 	_cloud_material = _clouds.material_override as ShaderMaterial
-	_shell(6.80, ATMOSPHERE_SHADER)
+	_atmosphere = _shell(6.80, ATMOSPHERE_SHADER)
 	var body_mesh := SphereMesh.new()
 	body_mesh.radial_segments = 16
 	body_mesh.rings = 8
@@ -275,7 +276,7 @@ func update_world(data: Dictionary) -> void:
 		_plants_initialized = false
 		_sandbox_dabs = dabs
 	_geometry.configure(data)
-	var signature := hash([data["config"]["seed"], _geometry.sea, data["elevation"]])
+	var signature := hash([data["config"]["seed"], _geometry.sea, _geometry.relief, data["elevation"]])
 	if _ground.mesh == null or signature != _terrain_signature:
 		_terrain_signature = signature
 		_visuals.clear()
@@ -292,6 +293,16 @@ func update_world(data: Dictionary) -> void:
 	_update_weather()
 	_ground_material.set_shader_parameter("sea_level", _geometry.sea)
 	_ground_material.set_shader_parameter("temperature", float(data["temperature"]))
+	var earth = data.get("earth")
+	_ground_material.set_shader_parameter("earth_mode", earth is Dictionary)
+	_ground_material.set_shader_parameter("earth_heat", clampf((float(data["temperature"]) - 100.0) / 1400.0, 0.0, 1.0) if earth is Dictionary else 0.0)
+	if earth is Dictionary:
+		var meters_per_unit := float(earth["radius_m"]) / Geometry.RADIUS
+		_clouds.scale = Vector3.ONE * (Geometry.RADIUS + float(earth["cloud_height_m"]) / meters_per_unit) / 6.62
+		_atmosphere.scale = Vector3.ONE * (Geometry.RADIUS + float(earth["atmosphere_height_m"]) / meters_per_unit) / 6.80
+	else:
+		_clouds.scale = Vector3.ONE
+		_atmosphere.scale = Vector3.ONE
 	_ground_material.set_shader_parameter("rainfall", float(data["config"]["rainfall"]))
 	_cloud_material.set_shader_parameter("humidity", float(data["config"]["rainfall"]))
 	_update_organisms()
@@ -589,12 +600,15 @@ func _update_camera(delta: float) -> void:
 	_camera.near = clampf(_altitude * 0.02, 0.0005, 0.2)
 	_camera.position = Geometry.direction(uv) * distance
 	_camera.look_at(Vector3.ZERO, Vector3.UP)
-	var description := "ОРБИТА" if _altitude > 4 else ("РЕГИОН" if _altitude > 0.4 else "МИКРОМИР")
+	var early_earth := snapshot.get("earth") is Dictionary
+	var description := "ОРБИТА" if _altitude > 4 else ("РЕГИОН" if _altitude > 0.4 else ("ПОВЕРХНОСТЬ" if early_earth else "МИКРОМИР"))
 	if _follow:
 		description += " · СЛЕЖЕНИЕ #%d" % selected_id
 	if track_lineage and tracked_lineage >= 0:
 		description += " · ЛИНИЯ #%d%s" % [tracked_lineage, "" if _lineage_alive else " (ИСЧЕЗЛА)"]
 	_hud.text = description + "  /  ×%.0f" % (13.0 / _altitude)
+	if early_earth:
+		_hud.text += "\nВЫСОТА %.1f км · РАДИУС 6 371 км\nРельеф без игрового увеличения · сетка 80 × 48" % (_altitude * float(snapshot["earth"]["radius_m"]) / Geometry.RADIUS / 1000.0)
 	if not snapshot.is_empty():
 		var x := posmod(floori(uv.x * _geometry.width), _geometry.width)
 		var y := clampi(floori(uv.y * _geometry.height), 0, _geometry.height - 1)
@@ -612,7 +626,7 @@ func _aim_at(uv: Vector2) -> void:
 func set_scale_level(level: int) -> void:
 	stop_stroke()
 	_follow = false
-	_target_altitude = [13.0, 1.2, 0.10][clampi(level, 0, 2)]
+	_target_altitude = ([13.0, 1.2, 0.015] if snapshot.get("earth") is Dictionary else [13.0, 1.2, 0.10])[clampi(level, 0, 2)]
 	if level == 2 and not snapshot.is_empty() and not snapshot["creatures"].is_empty():
 		if not _visuals.has(selected_id):
 			select_creature(int(snapshot["creatures"][0]["id"]))
@@ -747,7 +761,7 @@ func _gui_input(event: InputEvent) -> void:
 				var hit = _geometry.pick(_camera.project_ray_origin(event.position), _camera.project_ray_normal(event.position))
 				if hit is Vector2:
 					_aim_at(hit)
-			_target_altitude = clampf(_target_altitude * (0.77 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.30), 0.045, 30.0)
+			_target_altitude = clampf(_target_altitude * (0.77 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.30), 0.015 if snapshot.get("earth") is Dictionary else 0.045, 30.0)
 			accept_event()
 		if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 			grab_focus()

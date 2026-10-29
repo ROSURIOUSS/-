@@ -26,6 +26,13 @@ class Simulation:
             world = World(Config.parse(data))
             self.world, self.paused, self.error = world, False, None
             self.sandbox.clear()
+        elif name == "earth":
+            if data.keys() - {"seed"}:
+                raise ValueError("Для ранней Земли задаётся только семя рельефа")
+            world = World.early_earth(data.get("seed", 42))
+            self.world, self.paused, self.error = world, True, None
+            self.sandbox.clear()
+            return "Ранняя Земля создана без жизни. Нажмите «Продолжить»: 5 млн лет за шаг. Это упрощённый сценарий, не полная история Земли."
         elif name == "control":
             if data.keys() - {"paused", "speed"}:
                 raise ValueError("Неизвестная команда времени")
@@ -57,7 +64,7 @@ class Simulation:
                 if self.error is not None:
                     raise ValueError("Автосохранение остановлено из-за ошибки расчёта; прежние копии сохранены")
                 self.autosaves = autosave.save(self.world, self.paused, self.speed, root)
-                return "Автокопия сохранена: день %.2f" % self.world.day
+                return ("Автокопия ранней Земли: %.0f млн лет после формирования" % self.world.earth["age_myr"]) if self.world.earth is not None else "Автокопия сохранена: день %.2f" % self.world.day
             else:
                 if "slot" in data:
                     autosave.slot_path(autosave.directory(root), data["slot"])
@@ -69,6 +76,8 @@ class Simulation:
                 self.sandbox.clear()
                 return f"Автокопия восстановлена: день {world.day:.2f}. Мир на паузе"
         elif name == "brush":
+            if self.world.earth is not None:
+                raise ValueError("Кисти отключены в добиологическом сценарии. Для вмешательств создайте обычную песочницу.")
             return self.sandbox.apply(self.world, data, self.paused, self.speed)
         elif name == "undo":
             if data:
@@ -84,6 +93,9 @@ class Simulation:
                 try:
                     for _ in range(1 if single else self.speed):
                         self.world.step()
+                        if self.world.earth is not None and self.world._earth_surface["complete"]:
+                            self.paused = True
+                            break
                 except Exception as exc:
                     self.paused = True
                     self.error = f"Ошибка расчёта: {type(exc).__name__}: {exc}"

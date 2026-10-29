@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import random
+from . import earth as earth_model
 from .intelligence import new_experience, act, learn, outcome_reward, summary as intelligence_summary
 from .feeding import LABELS, advance_forage, initial_forage, food_signal, take_meal
 from .behavior import public_observation
@@ -34,11 +35,11 @@ class Config:
     predator_ratio: float = 0.16
 
     @classmethod
-    def parse(cls, values: dict) -> Config:
+    def parse(cls, values: dict, *, allow_empty: bool = False) -> Config:
         if not isinstance(values, dict):
             raise ValueError("Параметры должны быть объектом JSON")
         bounds = {
-            "seed": (-2147483648, 2147483647), "population": (2, 300),
+            "seed": (-2147483648, 2147483647), "population": (0 if allow_empty else 2, 300),
             "temperature": (-15, 45), "rainfall": (0.05, 1.0),
             "sea_level": (0.15, 0.75), "mutation": (0.0, 0.5),
             "predator_ratio": (0.0, 0.5),
@@ -208,6 +209,8 @@ def initial_brain(rng: random.Random, diet: str) -> list[float]:
 class World:
     def __init__(self, config: Config):
         self.config = config
+        self.earth = None
+        self._earth_surface = None
         self.rng = random.Random(config.seed)
         self.day = 0.0
         self.observations: dict[int, dict] = {}
@@ -248,14 +251,31 @@ class World:
                                                    diet="carnivore" if i < predators else "herbivore"))
         self.record()
 
+    @classmethod
+    def early_earth(cls, seed=42):
+        parsed = Config.parse({"seed": seed})
+        world = cls(Config(seed=parsed.seed, population=0, predator_ratio=0))
+        world.earth = {"format": 1, "age_myr": 0.0}
+        for name in ("food", "leaves", "seeds", "meat", "soil", "canopy"):
+            setattr(world, name, [0.0] * (WIDTH * HEIGHT))
+        earth_model.refresh(world, reset_water=True)
+        world.events = ["Ранняя Земля: заданный сценарий остывания, без организмов и готовой растительности."]
+        return world
+
+    @property
+    def surface_sea_level(self):
+        return self._earth_surface["sea_level"] if self.earth is not None and self._earth_surface is not None else self.config.sea_level
+
     def land(self, tile: int) -> bool:
-        return self.elevation[tile] > self.config.sea_level
+        return self.elevation[tile] > self.surface_sea_level
 
     def tile(self, x: float, y: float) -> int:
         return max(0, min(HEIGHT - 1, int(y))) * WIDTH + math.floor(x) % WIDTH
 
     @property
     def temperature(self) -> float:
+        if self.earth is not None:
+            return self._earth_surface["temperature_c"]
         return self.config.temperature + 8 * math.sin(self.day * math.tau / 120)
 
     def local_temperature(self, y: float, x: float | None = None) -> float:
@@ -263,6 +283,9 @@ class World:
         return self.temperature - 12 * abs(y / HEIGHT * 2 - 1) + bias
 
     def refresh_weather(self):
+        if self.earth is not None:
+            earth_model.refresh(self)
+            return
         natural = weather_field(self.config, self.day, WIDTH, HEIGHT)
         self.precipitation = [min(1.0, rain + bias) for rain, bias in zip(natural, self.rain_bias)]
 
@@ -306,6 +329,9 @@ class World:
         return creature
 
     def step(self, dt: float = 0.25):
+        if self.earth is not None:
+            earth_model.advance(self, dt)
+            return
         self.day += dt
         self.observations = {}
         thermal_decay = math.exp(-dt / 120)
@@ -472,7 +498,7 @@ class World:
 
     def biome(self, tile: int) -> int:
         """0 ocean, 1 coast, 2 tundra, 3 drylands, 4 grass, 5 forest, 6 wetland, 7 highland."""
-        altitude = self.elevation[tile] - self.config.sea_level
+        altitude = self.elevation[tile] - self.surface_sea_level
         if altitude <= 0:
             return 0
         if altitude < 0.025:
@@ -526,7 +552,9 @@ class World:
                       "behavior": public_observation(self.observations.get(c.id))}
                      for c in self.creatures]
         lineages = self.lineages()
-        return {"leaves": [round(v, 3) for v in self.leaves],
+        return {"earth": dict(self._earth_surface) if self.earth is not None else None,
+                "surface_sea_level": self.surface_sea_level,
+                "leaves": [round(v, 3) for v in self.leaves],
                 "seeds": [round(v, 3) for v in self.seeds],
                 "nutrition": {"grass_percent": round(sum(self.food) / len(self.land_tiles) * 100),
                               "leaves_percent": round(sum(self.leaves) / len(self.land_tiles) * 100),

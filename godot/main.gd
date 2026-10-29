@@ -41,6 +41,9 @@ var ecosystem_label: Label
 var weather_label: Label
 var error_label: Label
 var pause_button: Button
+var earth_button: Button
+var earth_dialog: ConfirmationDialog
+var scale_select: OptionButton
 var create_button: Button
 var speed_select: OptionButton
 const BRUSHES = ["observe", "spawn_herbivore", "spawn_carnivore", "plant", "fertilize", "warm", "cool", "uplift", "lower", "dry", "heal", "erase_life", "rain"]
@@ -97,17 +100,19 @@ func set_controls_enabled(enabled: bool) -> void:
 	enabled = enabled and save_panel.session_ready
 	_controls_ready = enabled
 	save_panel.set_available(enabled)
-	brush_select.disabled = not enabled
+	var geological := snapshot.get("earth") is Dictionary
+	brush_select.disabled = not enabled or geological
 	brush_radius.editable = enabled
 	brush_strength.editable = enabled
 	brush_count.editable = enabled
 	single_step_button.disabled = not enabled
 	undo_button.disabled = not enabled or not snapshot.get("sandbox", {}).get("can_undo", false)
-	map_view.brush_enabled = enabled
+	map_view.brush_enabled = enabled and not geological
 	if not enabled:
 		map_view.stop_stroke()
 	create_button.disabled = not enabled
-	pause_button.disabled = not enabled
+	earth_button.disabled = not enabled
+	pause_button.disabled = not enabled or (geological and snapshot["earth"]["complete"])
 	speed_select.disabled = not enabled
 	save_button.disabled = not enabled
 	load_button.disabled = not enabled
@@ -255,6 +260,16 @@ func build_ui() -> void:
 	create_button.modulate = ACCENT
 	create_button.pressed.connect(create_world)
 	sidebar.add_child(create_button)
+	earth_button = Button.new()
+	earth_button.text = "Ранняя Земля · начать без жизни…"
+	earth_button.tooltip_text = "Заданный сценарий первых 600 млн лет: остывание и океан. Происхождение жизни пока не моделируется. Заменит текущий мир."
+	earth_button.pressed.connect(func(): earth_dialog.popup_centered())
+	sidebar.add_child(earth_button)
+	earth_dialog = ConfirmationDialog.new()
+	earth_dialog.title = "Начать раннюю Землю?"
+	earth_dialog.dialog_text = "Это заменит текущий мир без переноса существ.\nСначала сохраните важный прогресс.\n\nСценарий: 0–600 млн лет после формирования, без жизни.\nОстывание задано формулой, это не полная история Земли."
+	earth_dialog.confirmed.connect(func(): send_command("earth", {"seed": int(inputs["seed"].value)}))
+	add_child(earth_dialog)
 	sidebar.add_child(label_for("Заменит текущую симуляцию.\nПараметры применяются при создании.\n\nНейросеть: 16 → 8 ↺ → 4.\n8 состояний кратковременной памяти.\nПотомки наследуют её с мутациями.\n\nПробел — пауза. F11 — полный экран.\nCtrl+S / Ctrl+O — сохранить / загрузить.", 12, MUTED))
 	var main := VBoxContainer.new()
 	main.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -273,7 +288,7 @@ func build_ui() -> void:
 	clock = label_for("День 0", 14, MUTED)
 	clock.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toolbar.add_child(clock)
-	var scale_select := OptionButton.new()
+	scale_select = OptionButton.new()
 	for title in ["Орбита", "Регион", "Микромир"]:
 		scale_select.add_item(title)
 	scale_select.item_selected.connect(func(index: int): map_view.set_scale_level(index))
@@ -421,20 +436,32 @@ func receive_state(data: Dictionary) -> void:
 	snapshot = data
 	if _sync_parameters:
 		for key: String in inputs:
-			inputs[key].value = data["config"][key]
+			if key != "population" or data.get("earth") == null:
+				inputs[key].value = data["config"][key]
 		_sync_parameters = false
 	connection.text = "● Локальная симуляция"
 	set_controls_enabled(_blocking_requests == 0)
 	undo_button.tooltip_text = "Вернуть весь мир к дню %.2f и остановить время" % float(data["sandbox"]["undo_day"]) if data["sandbox"]["can_undo"] else "Пока нечего отменять"
 	if data.get("error") != null:
 		show_error(str(data["error"]))
-	elif int(data["population"]) == 0:
+	elif int(data["population"]) == 0 and data.get("earth") == null:
 		show_error("Популяция вымерла. Заселите планету кистью или создайте новый мир.")
 	stats.text = "Живых %d   ·   Травоядных %d   ·   Хищников %d   ·   Поколение %d\nТемпература %.1f °C   ·   Трава %d%%   ·   Успешных охот %d" % [data["population"], data["herbivores"], data["carnivores"], data["generation"], data["temperature"], data["food_percent"], data["death_causes"]["predation"]]
 	ecosystem_label.text = "ЛЕСА %d%%   /   ПЛОДОРОДИЕ %d%%   /   ЗАСЕЛЕНО %d УЧАСТКОВ   /   БИОМАССА %.1f" % [data["ecosystem"]["forest_percent"], data["ecosystem"]["fertility_percent"], data["ecosystem"]["occupied_tiles"], data["ecosystem"]["biomass"]]
 	ecosystem_label.text += "\nКОРМА / ТРАВА %d%% · ЛИСТВА %d%% · СЕМЕНА %d%%" % [data["nutrition"]["grass_percent"], data["nutrition"]["leaves_percent"], data["nutrition"]["seeds_percent"]]
 	weather_label.text = "ОСАДКИ %d%%   /   ВЛАГА ПОЧВЫ %d%%   /   ЗАСУХА НА %d%% СУШИ" % [data["weather"]["rain_percent"], data["weather"]["moisture_percent"], data["weather"]["drought_percent"]]
 	clock.text = "День %d · %s" % [int(data["day"]), season_name(float(data["day"]))]
+	var earth = data.get("earth")
+	scale_select.set_item_text(2, "Поверхность" if earth is Dictionary else "Микромир")
+	if earth is Dictionary:
+		stats.text = "РАННЯЯ ЗЕМЛЯ · %.0f млн лет после формирования\n%.1f °C · Твёрдая кора %.0f%% · Океан %.0f%% поверхности" % [float(earth["age_myr"]), float(earth["temperature_c"]), float(earth["solid_fraction"]) * 100, float(earth["ocean_percent"])]
+		ecosystem_label.text = "УПРОЩЁННЫЙ СЦЕНАРИЙ / " + str(earth["phase"])
+		weather_label.text = "Радиус 6 371 км · Рельеф до 8 км · Без существ, растений и готовой почвы"
+		clock.text = "%.2f млрд лет назад · 5 млн лет/шаг" % (float(earth["years_ago_myr"]) / 1000.0)
+		if earth["complete"]:
+			show_error("Конец реализованного сценария. Дальнейшее происхождение и развитие жизни ещё не добавлено.")
+		brush_select.select(0)
+		update_brush()
 	pause_button.text = "Продолжить" if data["paused"] else "Пауза"
 	for index in range(speed_select.item_count):
 		if speed_select.get_item_id(index) == int(data["speed"]):
@@ -531,7 +558,7 @@ func send_command(command: String, data: Dictionary) -> void:
 		show_error("Ядро не готово. Команда не отправлена.")
 		return
 	map_view.stop_stroke()
-	if command in ["world", "load", "save", "undo", "autosave", "autosave_info", "recover"]:
+	if command in ["world", "earth", "load", "save", "undo", "autosave", "autosave_info", "recover"]:
 		_blocking_requests += 1
 		set_controls_enabled(false)
 	bridge.submit(command, data)
@@ -544,7 +571,7 @@ func receive_command(command: String, success: bool, message: String) -> void:
 			sandbox_status.text = message
 			error_label.visible = false
 			return
-	if command in ["world", "load", "save", "undo", "autosave", "autosave_info", "recover"]:
+	if command in ["world", "earth", "load", "save", "undo", "autosave", "autosave_info", "recover"]:
 		_blocking_requests = maxi(0, _blocking_requests - 1)
 	if not success:
 		if command == "save":
@@ -552,7 +579,7 @@ func receive_command(command: String, success: bool, message: String) -> void:
 		set_controls_enabled(_blocking_requests == 0)
 		show_error(message)
 		return
-	if command in ["world", "load", "recover"]:
+	if command in ["world", "earth", "load", "recover"]:
 		brush_select.select(0)
 		update_brush()
 		map_view.selected_id = -1
@@ -573,7 +600,7 @@ func receive_command(command: String, success: bool, message: String) -> void:
 		call_deferred("finish_quit")
 
 func _process(_delta: float) -> void:
-	save_panel.interaction_busy = map_view._painting or map_view._brush_pending or save_dialog.visible or load_dialog.visible or exit_dialog.visible
+	save_panel.interaction_busy = map_view._painting or map_view._brush_pending or save_dialog.visible or load_dialog.visible or exit_dialog.visible or earth_dialog.visible
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and not _quitting and not _exit_after_save:

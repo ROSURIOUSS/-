@@ -10,6 +10,7 @@ import tempfile
 from dataclasses import asdict, fields
 from pathlib import Path
 
+from . import earth as earth_model
 from .intelligence import new_experience, validate_experience
 from .behavior import validate_observations
 from .weather import initial_moisture
@@ -38,7 +39,8 @@ def array(value, length):
 
 
 def pack(world: World, paused: bool, speed: int) -> dict:
-    return {"format": 8, "config": asdict(world.config), "day": world.day,
+    return {"format": 9, "config": asdict(world.config), "day": world.day,
+            "earth": world.earth,
             "births": world.births, "deaths": world.deaths, "next_id": world.next_id,
             "introduced": world.introduced, "temperature_bias": world.temperature_bias,
             "moisture": world.moisture, "rain_bias": world.rain_bias,
@@ -115,7 +117,7 @@ def migrate_v4(data: dict) -> dict:
 
 def unpack(data: dict) -> tuple[World, bool, int]:
     try:
-        if not isinstance(data, dict) or type(data.get("format")) is not int or data["format"] not in (1, 2, 3, 4, 5, 6, 7, 8):
+        if not isinstance(data, dict) or type(data.get("format")) is not int or data["format"] not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
             raise ValueError("Неизвестный формат сохранения")
         if data["format"] == 1:
             data = migrate_v1(data)
@@ -139,8 +141,10 @@ def unpack(data: dict) -> tuple[World, bool, int]:
             data = migrate_v4(data)
         if not isinstance(data["config"], dict) or data["config"].keys() != asdict(Config()).keys():
             raise ValueError("Неполные параметры мира")
-        config = Config.parse(data["config"])
+        earth = earth_model.validate(data["earth"]) if data["format"] >= 9 else None
+        config = Config.parse(data["config"], allow_empty=earth is not None)
         world = World(config)
+        world.earth = earth
         world.day = float(number(data["day"], 0, 10**12))
         world.births = integer(data["births"], 0, 10**12)
         world.deaths = integer(data["deaths"], 0, 10**12)
@@ -294,6 +298,13 @@ def unpack(data: dict) -> tuple[World, bool, int]:
         if type(data["paused"]) is not bool or type(data["speed"]) is not int or data["speed"] not in (1, 2, 5, 10):
             raise ValueError("Неверное состояние времени")
         world.observations = validate_observations(data.get("observations", []), world.creatures, world.day)
+        if world.earth is not None:
+            if config.population != 0 or world.creatures or world.births or world.deaths or world.introduced or world.next_id != 1 or world.observations:
+                raise ValueError("В добиологическом сценарии не должно быть организмов или событий их жизни")
+            if abs(world.day * earth_model.MYR_PER_MODEL_DAY - world.earth["age_myr"]) > 1e-8:
+                raise ValueError("Несогласованные геологические часы")
+            if any(any(getattr(world, key)) for key in ("food", "leaves", "seeds", "meat", "soil", "canopy", "temperature_bias", "rain_bias")):
+                raise ValueError("В ранней Земле не должно быть готовой экосистемы или ручных поправок")
         return world, data["paused"], data["speed"]
     except (KeyError, TypeError, OverflowError, AttributeError) as exc:
         raise ValueError("Повреждённое или неполное сохранение") from exc

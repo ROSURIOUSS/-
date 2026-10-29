@@ -190,7 +190,7 @@ func receive_command(command: String, success: bool, message: String) -> void:
 			_phase = "choosing"
 			_update_dialog()
 			_dialog.popup_centered()
-	elif success and command in ["world", "load", "undo"]:
+	elif success and command in ["world", "earth", "load", "undo"]:
 		_version += 1
 
 func update_world(data: Dictionary) -> void:
@@ -231,7 +231,7 @@ func update_world(data: Dictionary) -> void:
 	elif not info.get("warnings", []).is_empty():
 		_status.text = "Повреждённые/недоступные слоты пропущены:\n" + "\n".join(info["warnings"])
 	elif not _records.is_empty():
-		_status.text = "Последняя копия: день %.2f · живых %d\n%s\nКаталог: %s" % [_records[0]["day"], _records[0]["population"], _records[0]["utc"], directory]
+		_status.text = "Последняя копия: %s · живых %d\n%s\nКаталог: %s" % [_record_time(_records[0]), _records[0]["population"], _records[0]["utc"], directory]
 	else:
 		_status.text = "Автокопий пока нет.\nКаталог: " + directory
 	set_available(_available)
@@ -246,7 +246,7 @@ func _update_records(info: Dictionary) -> void:
 		_records = records.duplicate(true)
 		for record: Dictionary in _records:
 			var index := _slots.item_count
-			_slots.add_item("Копия %d · день %.2f · %d живых" % [record["generation"], record["day"], record["population"]])
+			_slots.add_item("Копия %d · %s · %d живых" % [record["generation"], _record_time(record), record["population"]])
 			_slots.set_item_metadata(index, int(record["generation"]))
 			if int(record["generation"]) == selected_generation:
 				_slots.select(index)
@@ -275,7 +275,7 @@ func _update_dialog() -> void:
 	if _choice.is_empty():
 		_dialog.dialog_text = "Исправных копий не найдено.\nТекущий мир не заменён."
 	else:
-		_dialog.dialog_text = "%s\nКопия %d · день %.2f · живых %d · семя %d\n%s\nВосстановление заменит текущий мир и включит паузу.\n%s" % ["Найден сохранённый прогресс." if _startup_choice else "Восстановить выбранный прогресс?", _choice["generation"], _choice["day"], _choice["population"], _choice["seed"], _choice["utc"], _status_error]
+		_dialog.dialog_text = "%s\nКопия %d · %s · живых %d · семя %d\n%s\nВосстановление заменит текущий мир и включит паузу.\n%s" % ["Найден сохранённый прогресс." if _startup_choice else "Восстановить выбранный прогресс?", _choice["generation"], _record_time(_choice), _choice["population"], _choice["seed"], _choice["utc"], _status_error]
 
 func _confirm_restore() -> void:
 	if _choice.is_empty():
@@ -294,3 +294,6 @@ func _finish_startup(resume: bool) -> void:
 	readiness_changed.emit()
 	if resume:
 		command_requested.emit("control", {"paused": false})
+
+func _record_time(record: Dictionary) -> String:
+	return "%.0f млн лет после формирования" % float(record["earth_age_myr"]) if record.get("earth_age_myr") != null else "день %.2f" % float(record["day"])

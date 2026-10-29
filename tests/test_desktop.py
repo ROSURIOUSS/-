@@ -68,7 +68,7 @@ class PersistenceTests(unittest.TestCase):
 
     def test_rejects_malformed_saves(self):
         good = json.loads(json.dumps(persistence.pack(World(Config(population=2)), False, 1)))
-        for key, value in (("format", 9), ("format", True), ("food", []), ("day", float("nan")),
+        for key, value in (("format", 999), ("format", True), ("food", []), ("day", float("nan")),
                            ("speed", True), ("paused", "yes"), ("next_id", 1), ("rng", []),
                            ("creatures", [None]), ("history", []), ("events", [42])):
             with self.subTest(key=key):
@@ -133,7 +133,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(result.stderr, b'')
         packets = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(packets[0], {"type": "ready", "protocol": 10})
+        self.assertEqual(packets[0], {"type": "ready", "protocol": 11})
         return packets[1:]
 
     def test_actual_process_commands_and_graceful_quit(self):

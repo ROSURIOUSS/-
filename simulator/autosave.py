@@ -73,7 +73,8 @@ def read_slot(root: Path, slot: int):
     if parsed.tzinfo is None:
         raise ValueError("У времени автосохранения нет часового пояса")
     record = {"slot": slot, "generation": generation, "utc": stamp,
-              "day": world.day, "population": len(world.creatures), "seed": world.config.seed,
+              "day": world.day, "earth_age_myr": world.earth["age_myr"] if world.earth is not None else None,
+              "population": len(world.creatures), "seed": world.config.seed,
               "path": str(path)}
     return record, world, paused, speed
 

@@ -39,6 +39,16 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(before), encoding="utf-8")
     after_path.write_text(json.dumps(after), encoding="utf-8")
+    early = Simulation()
+    early.command("earth", {"seed": 42})
+    hot_path = args.output.with_name(args.output.stem + "-earth-hot.json")
+    cold_path = args.output.with_name(args.output.stem + "-earth-cold.json")
+    hot_path.write_text(json.dumps(early.state()), encoding="utf-8")
+    for _ in range(120):
+        early.command("single_step", {})
+    cold_path.write_text(json.dumps(early.state()), encoding="utf-8")
+    print(hot_path.resolve())
+    print(cold_path.resolve())
     print(args.output.resolve())
     print(after_path)
 

@@ -162,6 +162,33 @@ func _run() -> void:
 	view._latitude = old_latitude
 	view._altitude = old_altitude
 	view._rain_timer = 0.0
+	print("[SMOKE] early Earth physical geometry and shaders")
+	var hot: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(fixture.get_basename() + "-earth-hot.json"))
+	var cold: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(fixture.get_basename() + "-earth-cold.json"))
+	view.update_world(hot)
+	assert(view._ground_material.get_shader_parameter("earth_mode"))
+	assert(float(view._ground_material.get_shader_parameter("earth_heat")) > 0.9)
+	assert(absf(view._geometry.relief - 8000.0 / (6371000.0 / PlanetGeometry.RADIUS)) < 0.000001)
+	assert(view._bodies.multimesh.instance_count == 0 and view._plants.multimesh.instance_count == 0)
+	assert(absf(view._atmosphere.scale.x * 6.8 - (6.0 + 100000.0 / (6371000.0 / 6.0))) < 0.00001)
+	view.set_scale_level(0)
+	if not screenshots.is_empty():
+		await create_timer(0.5).timeout
+		await _capture(view, screenshots, "earth-magma")
+	view.update_world(cold)
+	assert(float(view._ground_material.get_shader_parameter("earth_heat")) == 0)
+	assert(float(cold["earth"]["ocean_percent"]) > 70)
+	assert(view._bodies.multimesh.instance_count == 0 and view._plants.multimesh.instance_count == 0)
+	view.set_scale_level(2)
+	assert(absf(view._target_altitude - 0.015) < 0.000001)
+	if not screenshots.is_empty():
+		view.set_scale_level(0)
+		await create_timer(0.5).timeout
+		await _capture(view, screenshots, "earth-ocean")
+	view.update_world(data)
+	assert(not view._ground_material.get_shader_parameter("earth_mode"))
+	assert(view._geometry.relief == PlanetGeometry.RELIEF)
+	assert(view._atmosphere.scale == Vector3.ONE)
 	print("[SMOKE] bundled worker")
 	var bridge := Bridge.new()
 	root.add_child(bridge)
@@ -358,6 +385,29 @@ func _run() -> void:
 		await process_frame
 	assert(resumed.save_panel.session_ready and resumed.snapshot["paused"])
 	assert(int(resumed.snapshot["config"]["seed"]) == 123 and resumed.snapshot["temperature_bias"].max() > 0)
+	print("[SMOKE] early Earth creation consent and geological clock")
+	resumed.earth_button.pressed.emit()
+	assert(resumed.earth_dialog.visible)
+	resumed.earth_dialog.hide()  # Cancel must leave the current living world alone.
+	assert(resumed.snapshot.get("earth") == null)
+	resumed.earth_button.pressed.emit()
+	resumed.earth_dialog.hide()
+	resumed.earth_dialog.confirmed.emit()
+	deadline = Time.get_ticks_msec() + 15000
+	while resumed.snapshot.get("earth") == null and Time.get_ticks_msec() < deadline:
+		await process_frame
+	assert(resumed.snapshot["earth"] is Dictionary and resumed.snapshot["paused"])
+	assert(resumed.snapshot["population"] == 0 and resumed.brush_select.disabled)
+	assert(resumed.clock.text.contains("млрд лет назад") and resumed.stats.text.contains("РАННЯЯ ЗЕМЛЯ"))
+	resumed.send_command("single_step", {})
+	while float(resumed.snapshot["earth"]["age_myr"]) < 5 and Time.get_ticks_msec() < deadline:
+		await process_frame
+	assert(float(resumed.snapshot["earth"]["age_myr"]) == 5)
+	resumed.save_panel.request_save()
+	while (resumed.save_panel._saving or resumed.save_panel._records[0].get("earth_age_myr") == null) and Time.get_ticks_msec() < deadline:
+		await process_frame
+	assert(float(resumed.save_panel._records[0]["earth_age_myr"]) == 5)
+	assert(resumed.save_panel._record_time(resumed.save_panel._records[0]).contains("млн лет"))
 	resumed.set_controls_enabled(false)
 	await resumed.bridge.shutdown()
 	resumed.queue_free()
@@ -367,7 +417,7 @@ func _run() -> void:
 	DirAccess.remove_absolute(backup_folder)
 	DirAccess.remove_absolute(test_preferences)
 	DirAccess.remove_absolute(session_root)
-	print("PASS: planet, meshes, layers, zoom, bundled core, sandbox IPC/undo/step, body genes, lineage follow, weather, desktop toolbox, autosave timer/rotation/selection/restart consent, forage textures/plants/layers/real meal, individual neural learning, shutdown")
+	print("PASS: planet, meshes, layers, zoom, bundled core, sandbox IPC/undo/step, body genes, lineage follow, weather, desktop toolbox, autosave timer/rotation/selection/restart consent, forage textures/plants/layers/real meal, individual neural learning, early Earth physical scales/clock/consent/save, shutdown")
 	quit(0)
 
 func _capture(view: PlanetView, folder: String, name: String) -> void:
