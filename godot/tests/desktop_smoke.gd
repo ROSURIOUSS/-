@@ -216,6 +216,8 @@ func _run() -> void:
 	deadline = Time.get_ticks_msec() + 15000
 	while (app.snapshot.is_empty() or not app.save_panel.session_ready or app.snapshot.get("paused", true)) and Time.get_ticks_msec() < deadline:
 		await process_frame
+	if not app.save_panel.session_ready or app.snapshot.is_empty():
+		print("[SMOKE] startup diagnostics: ", JSON.stringify({"phase": app.save_panel._phase, "ready": app.bridge.is_ready, "broken": app.bridge._broken, "pending": app.bridge._pending_command, "queue": app.bridge._queue, "waiting": app.bridge._waiting, "snapshot_day": app.snapshot.get("day"), "paused": app.snapshot.get("paused"), "error": app.error_label.text, "core_stderr": app.bridge._diagnostics, "records": app.save_panel._records, "panel_status": app.save_panel._status.text}))
 	assert(app.save_panel.session_ready and not app.snapshot.is_empty(), "Desktop UI startup/recovery check did not finish")
 	app.save_panel.enabled = false
 	assert(app.brush_select.selected == 0 and app.undo_button.disabled)
