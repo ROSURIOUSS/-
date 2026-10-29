@@ -16,8 +16,10 @@ from pathlib import Path
 
 try:
     from .launch import ROOT, find_godot
+    from .bundle_core import build_bundle
 except ImportError:
     from launch import ROOT, find_godot
+    from bundle_core import build_bundle
 
 
 def main() -> int:
@@ -32,6 +34,7 @@ def main() -> int:
         print("Установи версию PyInstaller с поддержкой своего Python: python -m pip install --upgrade pyinstaller")
         return 1
     try:
+        build_bundle()
         godot = find_godot(args.godot)
         folder = ROOT / "build" / ("Biosphere-Windows" if sys.platform == "win32" else "Biosphere-Linux")
         folder.mkdir(parents=True, exist_ok=True)
@@ -52,13 +55,15 @@ def main() -> int:
         else:
             # Avoid accidentally reusing a stale frozen core in a source-based build.
             binary.unlink(missing_ok=True)
-            shutil.copytree(ROOT / "simulator", sources, dirs_exist_ok=True,
-                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            if sources.exists():
+                shutil.rmtree(sources)
+            if not any(core.iterdir()):
+                core.rmdir()
         (folder / "START.txt").write_text(
             "Биосфера — настольная программа. Запусти Biosphere.\n"
             + ("Python включён в папку core; установка Python не нужна.\n" if args.bundle_python
                else "Нужен установленный Python 3.11+. Ядро запустится автоматически.\n")
-            + "Папка core и файл .pck (если он есть) должны оставаться рядом с программой.\n"
+            + "Не удаляй папку core и файл .pck, если они есть рядом с программой.\n"
               "Для продолжения мира используй кнопки Сохранить / Загрузить.\n", encoding="utf-8")
         print(f"Готово: {output}\nПередавай всю папку {folder.name}, не только исполняемый файл.")
         return 0

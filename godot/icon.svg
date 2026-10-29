@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+<defs><radialGradient id="o" cx="32%" cy="25%"><stop stop-color="#398c99"/><stop offset=".6" stop-color="#164d66"/><stop offset="1" stop-color="#082332"/></radialGradient><clipPath id="c"><circle cx="64" cy="64" r="40"/></clipPath></defs>
+<rect width="128" height="128" rx="27" fill="#0a171f"/>
+<circle cx="64" cy="64" r="45" fill="none" stroke="#4389a3" stroke-opacity=".45" stroke-width="3"/>
+<circle cx="64" cy="64" r="40" fill="url(#o)"/>
+<g clip-path="url(#c)" fill="#82ad75"><path d="M23 45 43 30 57 36 59 47 73 55 68 67 52 66 45 78 35 71 32 57Z"/><path d="M77 76 91 62 110 68 107 91 91 105 78 98 82 87Z"/><path d="M60 14 79 22 79 32 69 34 57 27Z"/></g>
+<ellipse cx="64" cy="64" rx="57" ry="19" transform="rotate(-28 64 64)" fill="none" stroke="#c6ee8b" stroke-width="3"/>
+<circle cx="108" cy="35" r="6" fill="#d8f6a7"/>
+<circle cx="24" cy="22" r="1.7" fill="#b4c8d4"/><circle cx="105" cy="104" r="2" fill="#b4c8d4"/>
+</svg>

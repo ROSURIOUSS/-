@@ -15,3 +15,48 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q simulator tools tests
+  gdscript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix .cache/gd-analyzer --no-audit --no-fund @gdscript-analyzer/core@0.6.1
+      - run: NODE_PATH=.cache/gd-analyzer/node_modules node tools/check_gdscript.cjs
+  native-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install software graphics and official Godot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb libgl1-mesa-dri
+          mkdir -p .cache/godot
+          gh release download 4.4.1-stable --repo godotengine/godot --pattern 'Godot_v4.4.1-stable_linux.x86_64.zip' --dir .cache/godot
+          unzip -q .cache/godot/Godot_v4.4.1-stable_linux.x86_64.zip -d .cache/godot
+          chmod +x .cache/godot/Godot_v4.4.1-stable_linux.x86_64
+      - name: Import native project
+        run: .cache/godot/Godot_v4.4.1-stable_linux.x86_64 --headless --path godot --editor --quit
+      - name: Exercise OpenGL planet, zoom and bundled worker
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          BIOSPHERE_PYTHON: python3
+        run: |
+          set -o pipefail
+          python tools/render_fixture.py
+          timeout 120s xvfb-run -a .cache/godot/Godot_v4.4.1-stable_linux.x86_64 --path godot --rendering-method gl_compatibility --rendering-driver opengl3 --script res://tests/desktop_smoke.gd -- --fixture="$PWD/.cache/snapshot.json" --screenshots="$PWD/.cache/screenshots" 2>&1 | tee .cache/native-smoke.log
+          if grep -E 'SCRIPT ERROR|SHADER ERROR|Parse Error|^ERROR:' .cache/native-smoke.log; then exit 1; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-planet-smoke
+          path: |
+            .cache/screenshots/*.png
+            .cache/native-smoke.log

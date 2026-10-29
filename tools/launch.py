@@ -34,6 +34,11 @@ def main() -> int:
     args = parser.parse_args()
     try:
         executable = find_godot(args.godot)
+        try:
+            from .bundle_core import build_bundle
+        except ImportError:
+            from bundle_core import build_bundle
+        build_bundle()
         env = os.environ.copy()
         # The launcher and worker use the same interpreter, including a venv.
         import sys

@@ -33,14 +33,37 @@ func start() -> void:
 	_waiting = 0.0
 	var folder := OS.get_executable_path().get_base_dir()
 	var binary := folder.path_join("core/biosphere-core.exe" if OS.get_name() == "Windows" else "core/biosphere-core")
-	if FileAccess.file_exists(binary):
+	if not OS.has_feature("editor") and FileAccess.file_exists(binary):
 		_launch(binary, PackedStringArray())
 		return
-	var script := folder.path_join("core/simulator/worker.py")
-	if OS.has_feature("editor"):
-		script = ProjectSettings.globalize_path("res://../simulator/worker.py").simplify_path()
-	if not FileAccess.file_exists(script):
-		_fail("Не найдено Python-ядро. В исходниках папки godot и simulator должны лежать рядом. В сборке нужна папка core рядом с программой.")
+	# Resolve res:// FIRST, then traverse its real filesystem parent. Never rely
+	# on an editor feature tag or attempt traversal inside a virtual res:// path.
+	var project := ProjectSettings.globalize_path("res://").trim_suffix("/")
+	var paths: Array[String] = []
+	var override := OS.get_environment("BIOSPHERE_CORE_DIR")
+	if not override.is_empty():
+		paths.append(override.path_join("simulator/worker.py"))
+		paths.append(override.path_join("worker.py"))
+	paths.append(project.get_base_dir().path_join("simulator/worker.py"))
+	paths.append(project.path_join("simulator/worker.py"))
+	paths.append(folder.path_join("core/simulator/worker.py"))
+	paths.append(project.path_join("core/simulator/worker.py"))
+	var script := ""
+	if not override.is_empty():
+		for candidate in paths.slice(0, 2):
+			if FileAccess.file_exists(candidate):
+				script = candidate
+				break
+	# The matching built-in core takes precedence over stale sibling folders.
+	if script.is_empty():
+		script = _unpack_bundled_core()
+	if script.is_empty():
+		for candidate in paths:
+			if FileAccess.file_exists(candidate):
+				script = candidate
+				break
+	if script.is_empty():
+		_fail("Не удалось найти или распаковать Python-ядро. Нужен res://python_core.zip (он входит в проект).\nПроверены пути:\n" + "\n".join(paths) + "\nКаталог данных: " + OS.get_user_data_dir())
 		return
 	var explicit := OS.get_environment("BIOSPHERE_PYTHON")
 	for argument in OS.get_cmdline_user_args():
@@ -63,6 +86,48 @@ func start() -> void:
 			_launch(str(candidate["path"]), prefix + PackedStringArray(["-u", script]))
 			return
 	_fail("Не найден Python 3.11 или новее. Установите Python и перезапустите ядро. Если он уже установлен, задайте путь через BIOSPHERE_PYTHON или --python=полный_путь.")
+
+func _unpack_bundled_core() -> String:
+	const BUNDLE := "res://python_core.zip"
+	if not FileAccess.file_exists(BUNDLE):
+		return ""
+	var signature := FileAccess.get_sha256(BUNDLE).left(16)
+	var destination := ProjectSettings.globalize_path("user://python_core/" + signature)
+	var worker := destination.path_join("simulator/worker.py")
+	if FileAccess.file_exists(destination.path_join("complete")) and FileAccess.file_exists(worker):
+		return worker
+	var archive := ZIPReader.new()
+	if archive.open(BUNDLE) != OK:
+		return ""
+	for entry in archive.get_files():
+		# Only our source package may be extracted. No absolute/traversal paths.
+		if not entry.begins_with("simulator/") or not entry.ends_with(".py") or ".." in entry or "\\" in entry:
+			archive.close()
+			return ""
+		var target := destination.path_join(entry)
+		if DirAccess.make_dir_recursive_absolute(target.get_base_dir()) != OK:
+			archive.close()
+			return ""
+		var file := FileAccess.open(target, FileAccess.WRITE)
+		if file == null:
+			archive.close()
+			return ""
+		var bytes := archive.read_file(entry)
+		if (bytes.is_empty() and not entry.ends_with("__init__.py")) or not file.store_buffer(bytes):
+			file.close()
+			archive.close()
+			return ""
+		file.close()
+	archive.close()
+	if not FileAccess.file_exists(worker):
+		return ""
+	var marker := FileAccess.open(destination.path_join("complete"), FileAccess.WRITE)
+	if marker == null:
+		return ""
+	marker.store_string(signature)
+	marker.close()
+	return worker
+
 
 func _launch(executable: String, arguments: PackedStringArray) -> void:
 	var process := OS.execute_with_pipe(executable, arguments, false)
@@ -145,7 +210,7 @@ func _receive(line: String) -> void:
 		_fail("Повреждённый ответ Python-ядра.")
 		return
 	if packet.get("type") == "ready":
-		if packet.get("protocol") != 2:
+		if packet.get("protocol") != 7:
 			_fail("Несовместимая версия Python-ядра. Обновите папку core или пересоберите программу из текущих исходников.")
 			return
 		is_ready = true

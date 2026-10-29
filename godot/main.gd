@@ -3,6 +3,8 @@ extends Control
 
 const WorldView = preload("res://world_view.gd")
 const PopulationChart = preload("res://population_chart.gd")
+const SavePanel = preload("res://save_panel.gd")
+const LineagePanel = preload("res://lineage_panel.gd")
 const NeuralActivity = preload("res://neural_activity.gd")
 const PythonBridge = preload("res://python_bridge.gd")
 const ACCENT := Color("c6ee8b")
@@ -27,11 +29,30 @@ var connection: Label
 var clock: Label
 var inspector: Label
 var neural_activity: NeuralActivity
+var lineage_panel: LineagePanel
+var save_panel: SavePanel
+# Optional paths let native tests isolate recovery/settings from real user data.
+var autosave_directory: String = ""
+var preferences_path: String = "user://preferences.cfg"
 var journal: Label
+var details_panel: HBoxContainer
+var analytics_button: CheckButton
+var ecosystem_label: Label
+var weather_label: Label
 var error_label: Label
 var pause_button: Button
 var create_button: Button
 var speed_select: OptionButton
+const BRUSHES = ["observe", "spawn_herbivore", "spawn_carnivore", "plant", "fertilize", "warm", "cool", "uplift", "lower", "dry", "heal", "erase_life", "rain"]
+var brush_select: OptionButton
+var brush_radius: SpinBox
+var brush_strength: SpinBox
+var brush_count: SpinBox
+var undo_button: Button
+var single_step_button: Button
+var sandbox_status: Label
+var _controls_ready: bool = false
+var _blocking_requests: int = 0
 
 func _ready() -> void:
 	get_tree().auto_accept_quit = false
@@ -49,10 +70,16 @@ func restart_core() -> void:
 	error_label.visible = false
 	snapshot.clear()
 	map_view.update_world({})
+	lineage_panel.update_world({}, -1)
 	chart.history = []
 	chart.queue_redraw()
 	stats.text = "Запускаем симуляцию…"
 	_sync_parameters = true
+	_blocking_requests = 0
+	save_panel.begin_session()
+	map_view.finish_brush(false)
+	brush_select.select(0)
+	update_brush()
 	map_view.selected_id = -1
 	update_inspector()
 	set_controls_enabled(false)
@@ -63,9 +90,22 @@ func core_failed(message: String) -> void:
 	connection.text = "Ядро остановлено"
 	set_controls_enabled(false)
 	restart_button.disabled = false
+	save_panel.core_failed(message)
 	show_error(message)
 
 func set_controls_enabled(enabled: bool) -> void:
+	enabled = enabled and save_panel.session_ready
+	_controls_ready = enabled
+	save_panel.set_available(enabled)
+	brush_select.disabled = not enabled
+	brush_radius.editable = enabled
+	brush_strength.editable = enabled
+	brush_count.editable = enabled
+	single_step_button.disabled = not enabled
+	undo_button.disabled = not enabled or not snapshot.get("sandbox", {}).get("can_undo", false)
+	map_view.brush_enabled = enabled
+	if not enabled:
+		map_view.stop_stroke()
 	create_button.disabled = not enabled
 	pause_button.disabled = not enabled
 	speed_select.disabled = not enabled
@@ -173,6 +213,32 @@ func build_ui() -> void:
 	layout.add_child(scroll)
 	var sidebar := panel_for(scroll)
 	sidebar.custom_minimum_size.x = 265
+	build_sandbox(sidebar)
+	lineage_panel = LineagePanel.new()
+	lineage_panel.lineage_selected.connect(focus_lineage)
+	lineage_panel.tracking_changed.connect(func(enabled: bool):
+		if enabled:
+			brush_select.select(0)
+			update_brush()
+		map_view.set_lineage_tracking(enabled)
+		lineage_panel.update_world(snapshot, map_view.tracked_lineage)
+	)
+	sidebar.add_child(lineage_panel)
+	var weather_toggle := CheckButton.new()
+	weather_toggle.text = "Облака и дождь"
+	weather_toggle.button_pressed = true
+	weather_toggle.tooltip_text = "Только отображение. Погода и водный баланс рассчитываются и без эффектов."
+	weather_toggle.toggled.connect(func(enabled: bool): map_view.show_weather = enabled)
+	sidebar.add_child(weather_toggle)
+	sidebar.add_child(HSeparator.new())
+	save_panel = SavePanel.new()
+	save_panel.directory = autosave_directory if not autosave_directory.is_empty() else ProjectSettings.globalize_path("user://worlds/autosaves")
+	save_panel.settings_path = preferences_path
+	save_panel.command_requested.connect(send_command)
+	save_panel.readiness_changed.connect(func(): set_controls_enabled(_blocking_requests == 0 and bridge != null and bridge.is_ready))
+	save_panel.notice.connect(show_error)
+	sidebar.add_child(save_panel)
+	sidebar.add_child(HSeparator.new())
 	sidebar.add_child(label_for("01 / СОЗДАНИЕ МИРА", 12, MUTED))
 	sidebar.add_child(label_for("Всё начинается\nс условий.", 27))
 	sidebar.add_child(label_for("Настройте планету.\nДайте жизни найти свой путь.", 13, MUTED))
@@ -198,11 +264,20 @@ func build_ui() -> void:
 	main.add_child(label_for("Мир, который живёт сам.", 28))
 	stats = label_for("Ожидаем состояние мира…", 16, ACCENT)
 	main.add_child(stats)
+	ecosystem_label = label_for("ПОЧВЫ / ЛЕСА / РАССЕЛЕНИЕ — ожидаем мир", 12, MUTED)
+	main.add_child(ecosystem_label)
+	weather_label = label_for("ПОГОДА / ожидаем климатические данные", 12, MUTED)
+	main.add_child(weather_label)
 	var toolbar := HBoxContainer.new()
 	main.add_child(toolbar)
 	clock = label_for("День 0", 14, MUTED)
 	clock.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toolbar.add_child(clock)
+	var scale_select := OptionButton.new()
+	for title in ["Орбита", "Регион", "Микромир"]:
+		scale_select.add_item(title)
+	scale_select.item_selected.connect(func(index: int): map_view.set_scale_level(index))
+	toolbar.add_child(scale_select)
 	pause_button = Button.new()
 	pause_button.text = "Пауза"
 	pause_button.pressed.connect(toggle_pause)
@@ -213,7 +288,7 @@ func build_ui() -> void:
 	speed_select.item_selected.connect(func(index: int): send_command("control", {"speed": speed_select.get_item_id(index)}))
 	toolbar.add_child(speed_select)
 	var layer_select := OptionButton.new()
-	for title in ["Биосфера", "Запасы пищи", "Температура", "Останки"]:
+	for title in ["Биосфера", "Запасы пищи", "Температура", "Останки", "Почвы", "Влажность", "Осадки"]:
 		layer_select.add_item(title)
 	layer_select.item_selected.connect(func(index: int): map_view.layer = index; map_view.queue_redraw())
 	toolbar.add_child(layer_select)
@@ -226,13 +301,25 @@ func build_ui() -> void:
 	load_button.pressed.connect(func(): load_dialog.popup_centered_ratio(0.65))
 	toolbar.add_child(load_button)
 	map_view = WorldView.new()
-	map_view.creature_selected.connect(func(_id: int): update_inspector())
+	map_view.brush_requested.connect(submit_brush)
+	map_view.creature_selected.connect(func(identity: int):
+		_toggle_analytics(identity >= 0)
+		analytics_button.set_pressed_no_signal(identity >= 0)
+		update_inspector()
+		lineage_panel.update_world(snapshot, map_view.tracked_lineage)
+	)
 	main.add_child(map_view)
 	error_label = label_for("", 13, Color("f0cc9e"))
 	error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	error_label.visible = false
 	main.add_child(error_label)
+	analytics_button = CheckButton.new()
+	analytics_button.text = "Аналитика и организм"
+	main.add_child(analytics_button)
 	var details := HBoxContainer.new()
+	details_panel = details
+	details.visible = false
+	analytics_button.toggled.connect(_toggle_analytics)
 	details.add_theme_constant_override("separation", 15)
 	main.add_child(details)
 	var graph_box := panel_for(details)
@@ -253,6 +340,65 @@ func build_ui() -> void:
 	journal.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	main.add_child(journal)
 
+func build_sandbox(parent: VBoxContainer) -> void:
+	parent.add_child(label_for("ПЕСОЧНИЦА / ИНСТРУМЕНТЫ", 12, ACCENT))
+	brush_select = OptionButton.new()
+	for title in ["Наблюдать / выбирать", "Заселить травоядных", "Заселить хищников", "Озеленить", "Удобрить почву", "Нагреть", "Охладить", "Поднять сушу", "Опустить сушу", "Иссушить", "Лечить и кормить", "Убрать организмы", "Вызвать дождь"]:
+		brush_select.add_item(title)
+	brush_select.item_selected.connect(func(_index: int): update_brush())
+	parent.add_child(brush_select)
+	var row := HBoxContainer.new()
+	parent.add_child(row)
+	brush_radius = sandbox_number(row, "Радиус, уч.", 0.75, 8.0, 0.25, 2.5)
+	brush_strength = sandbox_number(row, "Сила", 0.1, 1.0, 0.1, 0.6)
+	brush_count = sandbox_number(parent, "Организмов за касание", 1, 30, 1, 5)
+	brush_radius.value_changed.connect(func(_value: float): update_brush())
+	brush_strength.value_changed.connect(func(_value: float): update_brush())
+	brush_count.value_changed.connect(func(_value: float): update_brush())
+	undo_button = Button.new()
+	undo_button.text = "Отменить мазок · Ctrl+Z"
+	undo_button.pressed.connect(undo_sandbox)
+	parent.add_child(undo_button)
+	single_step_button = Button.new()
+	single_step_button.text = "Один шаг и пауза · N"
+	single_step_button.pressed.connect(func(): send_command("single_step", {}))
+	parent.add_child(single_step_button)
+	sandbox_status = label_for("Наблюдение: жизнь автономна.", 12, MUTED)
+	sandbox_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	parent.add_child(sandbox_status)
+	var note := label_for("ЛКМ / удержание — кисть. Esc — наблюдать.\nОтмена возвращает весь мир к началу\nмазка, включая автономные события,\nи ставит время на паузу.", 11, MUTED)
+	parent.add_child(note)
+	parent.add_child(HSeparator.new())
+
+func sandbox_number(parent: Node, title: String, low: float, high: float, step_value: float, initial: float) -> SpinBox:
+	var column := VBoxContainer.new()
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(column)
+	column.add_child(label_for(title, 11, MUTED))
+	var spin := SpinBox.new()
+	spin.min_value = low
+	spin.max_value = high
+	spin.step = step_value
+	spin.value = initial
+	column.add_child(spin)
+	return spin
+
+func update_brush() -> void:
+	if map_view == null:
+		return
+	map_view.set_brush(BRUSHES[brush_select.selected], brush_radius.value, brush_strength.value, int(brush_count.value))
+	sandbox_status.text = "Наблюдение: жизнь автономна." if brush_select.selected == 0 else "ЛКМ на планете: " + brush_select.get_item_text(brush_select.selected)
+
+func submit_brush(data: Dictionary) -> void:
+	if not _controls_ready or bridge == null or not bridge.is_ready:
+		map_view.finish_brush(false)
+		return
+	bridge.submit("brush", data)
+
+func undo_sandbox() -> void:
+	if not undo_button.disabled:
+		send_command("undo", {})
+
 func add_parameter(parent: VBoxContainer, title: String, key: String, low: float, high: float, step_value: float, initial: float) -> void:
 	parent.add_child(label_for(title, 12, MUTED))
 	var spin := SpinBox.new()
@@ -271,23 +417,33 @@ func receive_state(data: Dictionary) -> void:
 			inputs[key].value = data["config"][key]
 		_sync_parameters = false
 	connection.text = "● Локальная симуляция"
-	set_controls_enabled(true)
+	set_controls_enabled(_blocking_requests == 0)
+	undo_button.tooltip_text = "Вернуть весь мир к дню %.2f и остановить время" % float(data["sandbox"]["undo_day"]) if data["sandbox"]["can_undo"] else "Пока нечего отменять"
 	if data.get("error") != null:
 		show_error(str(data["error"]))
 	elif int(data["population"]) == 0:
-		show_error("Популяция вымерла. Измените условия и создайте новый мир.")
+		show_error("Популяция вымерла. Заселите планету кистью или создайте новый мир.")
 	stats.text = "Живых %d   ·   Травоядных %d   ·   Хищников %d   ·   Поколение %d\nТемпература %.1f °C   ·   Растительность %d%%   ·   Успешных охот %d" % [data["population"], data["herbivores"], data["carnivores"], data["generation"], data["temperature"], data["food_percent"], data["death_causes"]["predation"]]
+	ecosystem_label.text = "ЛЕСА %d%%   /   ПЛОДОРОДИЕ %d%%   /   ЗАСЕЛЕНО %d УЧАСТКОВ   /   БИОМАССА %.1f" % [data["ecosystem"]["forest_percent"], data["ecosystem"]["fertility_percent"], data["ecosystem"]["occupied_tiles"], data["ecosystem"]["biomass"]]
+	weather_label.text = "ОСАДКИ %d%%   /   ВЛАГА ПОЧВЫ %d%%   /   ЗАСУХА НА %d%% СУШИ" % [data["weather"]["rain_percent"], data["weather"]["moisture_percent"], data["weather"]["drought_percent"]]
 	clock.text = "День %d · %s" % [int(data["day"]), season_name(float(data["day"]))]
 	pause_button.text = "Продолжить" if data["paused"] else "Пауза"
 	for index in range(speed_select.item_count):
 		if speed_select.get_item_id(index) == int(data["speed"]):
 			speed_select.select(index)
 	map_view.update_world(data)
+	lineage_panel.update_world(data, map_view.tracked_lineage)
 	chart.history = data["history"]
 	chart.queue_redraw()
 	var events: Array = data["events"]
-	journal.text = "Родилось %d · Погибло %d (голод %d / возраст %d / охота %d / старые %d)\n%s" % [data["births"], data["deaths"], data["death_causes"]["starvation"], data["death_causes"]["age"], data["death_causes"]["predation"], data["death_causes"]["legacy"], str(events.back()) if not events.is_empty() else "Мир развивается."]
+	journal.text = "Родилось %d · Заселено %d · Погибло %d (голод %d / возраст %d / охота %d / вмешательство %d / старые %d)\n%s" % [data["births"], data["introduced"], data["deaths"], data["death_causes"]["starvation"], data["death_causes"]["age"], data["death_causes"]["predation"], data["death_causes"]["intervention"], data["death_causes"]["legacy"], str(events.back()) if not events.is_empty() else "Мир развивается."]
 	update_inspector()
+	save_panel.update_world(data)
+
+func _toggle_analytics(enabled: bool) -> void:
+	details_panel.visible = enabled
+	map_view.custom_minimum_size.y = 250 if enabled else 360
+
 
 func season_name(day: float) -> String:
 	return ["Весна", "Лето", "Осень", "Зима"][int(fmod(day + 15, 120) / 30)]
@@ -302,12 +458,20 @@ func update_inspector() -> void:
 		if int(creature["id"]) == map_view.selected_id:
 			var diet := "Хищник" if creature["diet"] == "carnivore" else "Травоядное"
 			var parent := "—" if creature["parent"] == null else "#%d" % int(creature["parent"])
-			inspector.text = "%s #%d · Поколение %d\nЗдоровье %.0f%% · Энергия %.0f / 185\nВозраст %.1f дн. · Потомков %d · Охот %d\nСкорость %.2f · Размер %.2f · Обзор %.1f\nРодитель %s · Комфорт %.1f °C\n%s" % [diet, creature["id"], creature["generation"], creature["health"], creature["energy"], creature["age"], creature["children"], creature["kills"], creature["speed"], creature["size"], creature["vision"], parent, creature["ideal_temp"], creature["action"]]
+			var ancestry := "" if creature["lineage_complete"] else " (частичная)"
+			inspector.text = "%s #%d · Поколение %d\nЛиния #%d%s · Панцирь %.0f%%\nВытянутость %.2f · Подвижность %.2f\nЗдоровье %.0f%% · Энергия %.0f / 185\nВозраст %.1f дн. · Потомков %d · Охот %d\nСкорость %.2f · Размер %.2f · Обзор %.1f\nРодитель %s · Комфорт %.1f °C\nЗдесь %.1f °C · %s\nВлага %.0f%% · Осадки %.0f%%" % [diet, creature["id"], creature["generation"], creature["lineage"], ancestry, float(creature["armor"]) * 100, creature["elongation"], creature["mobility"], creature["health"], creature["energy"], creature["age"], creature["children"], creature["kills"], creature["speed"], creature["size"], creature["vision"], parent, creature["ideal_temp"], creature["local_temperature"], creature["action"], float(creature["local_moisture"]) * 100, float(creature["local_rain"]) * 100]
 			neural_activity.activations = creature["memory"]
 			neural_activity.queue_redraw()
 			return
 	inspector.text = "Этот организм завершил свой путь.\nВыберите другое существо."
 	neural_activity.queue_redraw()
+
+func focus_lineage(identity: int) -> void:
+	brush_select.select(0)
+	update_brush()
+	if map_view.focus_lineage(identity):
+		lineage_panel.set_tracking(true)
+		lineage_panel.update_world(snapshot, identity)
 
 func create_world() -> void:
 	var config: Dictionary = {}
@@ -316,29 +480,50 @@ func create_world() -> void:
 	send_command("world", config)
 
 func toggle_pause() -> void:
-	if not snapshot.is_empty():
+	if not snapshot.is_empty() and not pause_button.disabled:
 		send_command("control", {"paused": not snapshot["paused"]})
 
 func send_command(command: String, data: Dictionary) -> void:
 	if bridge == null or not bridge.is_ready:
 		if command == "save":
 			_exit_after_save = false
+		if command in ["autosave", "autosave_info", "recover"]:
+			save_panel.receive_command(command, false, "Ядро не готово")
 		show_error("Ядро не готово. Команда не отправлена.")
 		return
-	if command in ["world", "load", "save"]:
+	map_view.stop_stroke()
+	if command in ["world", "load", "save", "undo", "autosave", "autosave_info", "recover"]:
+		_blocking_requests += 1
 		set_controls_enabled(false)
 	bridge.submit(command, data)
 
 func receive_command(command: String, success: bool, message: String) -> void:
+	save_panel.receive_command(command, success, message)
+	if command == "brush":
+		map_view.finish_brush(success)
+		if success:
+			sandbox_status.text = message
+			error_label.visible = false
+			return
+	if command in ["world", "load", "save", "undo", "autosave", "autosave_info", "recover"]:
+		_blocking_requests = maxi(0, _blocking_requests - 1)
 	if not success:
 		if command == "save":
 			_exit_after_save = false
-		set_controls_enabled(true)
+		set_controls_enabled(_blocking_requests == 0)
 		show_error(message)
 		return
-	if command in ["world", "load"]:
+	if command in ["world", "load", "recover"]:
+		brush_select.select(0)
+		update_brush()
 		map_view.selected_id = -1
+		map_view.reset_view(true)
 		_sync_parameters = true
+	if command == "undo":
+		map_view.clear_population_visuals()
+		update_inspector()
+	if command in ["autosave", "autosave_info"]:
+		return
 	if command not in ["state", "step"]:
 		error_label.visible = false
 	if not message.is_empty():
@@ -348,9 +533,12 @@ func receive_command(command: String, success: bool, message: String) -> void:
 		_exit_after_save = false
 		call_deferred("finish_quit")
 
+func _process(_delta: float) -> void:
+	save_panel.interaction_busy = map_view._painting or map_view._brush_pending or save_dialog.visible or load_dialog.visible or exit_dialog.visible
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and not _quitting and not _exit_after_save:
-		if bridge != null and bridge.is_ready and not snapshot.is_empty():
+		if bridge != null and bridge.is_ready and not snapshot.is_empty() and save_panel.has_user_world:
 			exit_dialog.popup_centered()
 		else:
 			finish_quit()
@@ -371,7 +559,16 @@ func show_error(text: String) -> void:
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo:
 		return
-	if event.keycode == KEY_F11:
+	if (event.ctrl_pressed or event.meta_pressed) and event.keycode == KEY_Z and not get_viewport().gui_get_focus_owner() is LineEdit:
+		undo_sandbox()
+	elif event.keycode == KEY_ESCAPE:
+		brush_select.select(0)
+		update_brush()
+	elif event.keycode == KEY_N and not event.ctrl_pressed and not event.meta_pressed and not get_viewport().gui_get_focus_owner() is LineEdit and not single_step_button.disabled:
+		send_command("single_step", {})
+	elif event.keycode == KEY_HOME:
+		map_view.reset_view()
+	elif event.keycode == KEY_F11:
 		var fullscreen := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if fullscreen else DisplayServer.WINDOW_MODE_FULLSCREEN)
 	elif (event.ctrl_pressed or event.meta_pressed) and event.keycode == KEY_S and not save_button.disabled:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import random
+from .weather import advance_moisture, initial_moisture, weather_field
 try:
     from math import sumprod as _dot  # Python 3.12+: fast standard-library dot product.
 except ImportError:
@@ -54,6 +55,27 @@ class Config:
         return cls(**result)
 
 
+def environment_fields(config: Config, elevation: list, food: list) -> tuple[list, list]:
+    """Initial aggregate soil/plant succession, no extra RNG consumption."""
+    soil, canopy = [], []
+    for i, height in enumerate(elevation):
+        if height <= config.sea_level:
+            soil.append(0.0)
+            canopy.append(0.0)
+            continue
+        latitude = abs((i // WIDTH + 0.5) / HEIGHT * 2 - 1)
+        temperature = config.temperature - latitude * 12
+        fertility = max(0, min(1, 0.18 + config.rainfall * 0.6 - max(0, height - config.sea_level - 0.15)))
+        cover = max(0, min(1, (config.rainfall - 0.25) * 2.0 - abs(temperature - 20) * 0.018))
+        soil.append(fertility)
+        canopy.append(cover * (0.5 + food[i] * 0.5))
+    return soil, canopy
+
+
+def wrapped_dx(x: float, reference: float) -> float:
+    return (x - reference + WIDTH / 2) % WIDTH - WIDTH / 2
+
+
 @dataclass(slots=True)
 class Creature:
     id: int
@@ -74,7 +96,16 @@ class Creature:
     vision: float = 7.0
     health: float = 100.0
     kills: int = 0
+    elongation: float = 1.0
+    armor: float = 0.0
+    lineage: int = 0
+    lineage_complete: bool = True
     memory: list[float] = field(default_factory=lambda: [0.0] * HIDDEN)
+
+    @property
+    def mobility(self) -> float:
+        """Body streamlining versus shell mass; actuator speed remains a separate gene."""
+        return self.speed * math.sqrt(self.elongation) / (1 + 0.45 * self.armor)
 
     def think(self, inputs: list[float]) -> list[float]:
         # All recurrent neurons read the SAME previous state (no in-place updates).
@@ -104,7 +135,7 @@ class SpatialIndex:
 
     @classmethod
     def key(cls, x: float, y: float) -> tuple[int, int]:
-        return int(x // cls.CELL), int(y // cls.CELL)
+        return int((x % WIDTH) // cls.CELL), int(y // cls.CELL)
 
     def move(self, creature: Creature, old: tuple[int, int]):
         new = self.key(creature.x, creature.y)
@@ -113,16 +144,16 @@ class SpatialIndex:
             self.buckets.setdefault(new, []).append(creature)
 
     def nearest(self, source: Creature, diet: str, radius: float) -> Creature | None:
-        left, top = self.key(source.x - radius, source.y - radius)
-        right, bottom = self.key(source.x + radius, source.y + radius)
+        left, top = math.floor((source.x - radius) / self.CELL), math.floor((source.y - radius) / self.CELL)
+        right, bottom = math.floor((source.x + radius) / self.CELL), math.floor((source.y + radius) / self.CELL)
         best = None
         best_distance = radius * radius
         for cy in range(top, bottom + 1):
             for cx in range(left, right + 1):
-                for candidate in self.buckets.get((cx, cy), ()):
+                for candidate in self.buckets.get((cx % (WIDTH // self.CELL), cy), ()):
                     if candidate is source or candidate.diet != diet or candidate.health <= 0 or candidate.energy <= 0:
                         continue
-                    distance = (candidate.x - source.x) ** 2 + (candidate.y - source.y) ** 2
+                    distance = wrapped_dx(candidate.x, source.x) ** 2 + (candidate.y - source.y) ** 2
                     if distance < best_distance or (distance == best_distance and (best is None or candidate.id < best.id)):
                         best, best_distance = candidate, distance
         return best
@@ -131,7 +162,7 @@ class SpatialIndex:
 def sense(source: Creature, target: Creature | None) -> list[float]:
     if target is None:
         return [0.0, 0.0]
-    dx, dy = target.x - source.x, target.y - source.y
+    dx, dy = wrapped_dx(target.x, source.x), target.y - source.y
     distance = math.hypot(dx, dy)
     if distance < 1e-9:
         return [0.0, 0.0]
@@ -176,7 +207,8 @@ class World:
         self.day = 0.0
         self.births = 0
         self.deaths = 0
-        self.death_causes = {"starvation": 0, "age": 0, "predation": 0, "legacy": 0}
+        self.introduced = 0
+        self.death_causes = {"starvation": 0, "age": 0, "predation": 0, "legacy": 0, "intervention": 0}
         self.next_id = 1
         self.history: list[dict] = []
         self.events: list[str] = ["Сформирована планета. Началось заселение."]
@@ -195,6 +227,11 @@ class World:
                     self.elevation[y * WIDTH + x] = min(1.0, config.sea_level + 0.08)
         self.food = [self.rng.uniform(0.35, 1) if self.land(i) else 0.0 for i in range(WIDTH * HEIGHT)]
         self.meat = [0.0] * (WIDTH * HEIGHT)
+        self.soil, self.canopy = environment_fields(config, self.elevation, self.food)
+        self.temperature_bias = [0.0] * (WIDTH * HEIGHT)
+        self.moisture = initial_moisture(config, self.elevation)
+        self.rain_bias = [0.0] * (WIDTH * HEIGHT)
+        self.refresh_weather()
         self.land_tiles = [i for i in range(WIDTH * HEIGHT) if self.land(i)]
         self.creatures: list[Creature] = []
         predators = round(config.population * config.predator_ratio)
@@ -208,14 +245,19 @@ class World:
         return self.elevation[tile] > self.config.sea_level
 
     def tile(self, x: float, y: float) -> int:
-        return max(0, min(HEIGHT - 1, int(y))) * WIDTH + max(0, min(WIDTH - 1, int(x)))
+        return max(0, min(HEIGHT - 1, int(y))) * WIDTH + math.floor(x) % WIDTH
 
     @property
     def temperature(self) -> float:
         return self.config.temperature + 8 * math.sin(self.day * math.tau / 120)
 
-    def local_temperature(self, y: float) -> float:
-        return self.temperature - 12 * abs(y / HEIGHT * 2 - 1)
+    def local_temperature(self, y: float, x: float | None = None) -> float:
+        bias = self.temperature_bias[self.tile(x, y)] if x is not None else 0.0
+        return self.temperature - 12 * abs(y / HEIGHT * 2 - 1) + bias
+
+    def refresh_weather(self):
+        natural = weather_field(self.config, self.day, WIDTH, HEIGHT)
+        self.precipitation = [min(1.0, rain + bias) for rain, bias in zip(natural, self.rain_bias)]
 
     def new_creature(self, x: float, y: float, parent: Creature | None = None,
                      *, diet: str = "herbivore") -> Creature:
@@ -233,6 +275,8 @@ class World:
             speed = gene(parent.speed, 0.12, 0.6, 1.8)
             size = gene(parent.size, 0.1, 0.6, 1.5)
             vision = gene(parent.vision, 1.0, 3.0, 12.0)
+            elongation = gene(parent.elongation, 0.12, 0.65, 1.8)
+            armor = gene(parent.armor, 0.10, 0.0, 1.0)
         else:
             brain = initial_brain(rng, diet)
             hue = rng.random()
@@ -240,21 +284,43 @@ class World:
             speed = rng.uniform(1.1, 1.4) if diet == "carnivore" else rng.uniform(1.0, 1.5)
             size = rng.uniform(0.8, 1.2)
             vision = rng.uniform(6, 10)
+            elongation = rng.uniform(0.85, 1.2)
+            armor = rng.uniform(0.0, 0.3)
         creature = Creature(self.next_id, x, y, brain, hue, temp,
                             generation=parent.generation + 1 if parent else 1,
                             parent=parent.id if parent else None, diet=diet,
-                            speed=speed, size=size, vision=vision)
+                            speed=speed, size=size, vision=vision,
+                            elongation=elongation, armor=armor,
+                            lineage=parent.lineage if parent else self.next_id,
+                            lineage_complete=parent.lineage_complete if parent else True)
         self.next_id += 1
         return creature
 
     def step(self, dt: float = 0.25):
         self.day += dt
-        growth = self.config.rainfall * max(0.03, 1 - abs(self.temperature - 22) / 40) * 0.095 * dt
+        thermal_decay = math.exp(-dt / 120)
+        self.temperature_bias = [bias * thermal_decay for bias in self.temperature_bias]
+        rain_decay = math.exp(-dt / 3.0)
+        self.rain_bias = [bias * rain_decay for bias in self.rain_bias]
+        self.refresh_weather()
+        growth = max(0.03, 1 - abs(self.temperature - 22) / 40) * 0.075 * dt
         decay = math.exp(-0.025 * dt)
         for i in self.land_tiles:
             decomposed = self.meat[i] * (1 - decay)
             self.meat[i] *= decay
-            self.food[i] = min(1.0, self.food[i] + growth + decomposed * 0.2)
+            food = self.food[i]
+            cover = self.canopy[i]
+            local_temperature = self.local_temperature((i // WIDTH) + 0.5, i % WIDTH + 0.5)
+            self.moisture[i] = advance_moisture(self.moisture[i], self.precipitation[i], local_temperature,
+                                               cover, self.soil[i], self.elevation[i], self.config.sea_level, dt)
+            water = min(1.0, self.moisture[i] * 1.6)
+            climate = max(0.0, 1 - abs(local_temperature - 21) / 32)
+            self.soil[i] = max(0.0, min(1.0, self.soil[i] + decomposed * 0.25 + dt * (
+                cover * 0.0008 - max(0, 0.25 - food) * 0.002 - (1 - water) * 0.0005)))
+            self.canopy[i] = max(0.0, min(1.0, cover + dt * (
+                0.013 * climate * water * max(0, food - 0.45)
+                - 0.018 * max(0, 0.35 - food) - 0.006 * (1 - climate) - 0.008 * max(0.0, 0.22 - self.moisture[i]))))
+            self.food[i] = min(1.0, food + growth * water * (0.4 + climate * 0.6) * (0.5 + self.soil[i] * 0.7) * (1 - cover * 0.18) + decomposed * 0.2)
         dead: set[int] = set()
         babies: list[Creature] = []
         had_population = bool(self.creatures)
@@ -279,7 +345,8 @@ class World:
             c.age += dt
             tile = self.tile(c.x, c.y)
             nearby = [self.tile(c.x + dx, c.y + dy) for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2))]
-            temp = self.local_temperature(c.y)
+            temp = self.local_temperature(c.y, c.x)
+            temp -= self.canopy[tile] * (3.0 if temp > 20 else -0.8)
             prey = index.nearest(c, "herbivore", c.vision) if c.diet == "carnivore" else None
             threat = index.nearest(c, "carnivore", c.vision) if c.diet == "herbivore" else None
             resource = self.food if c.diet == "herbivore" else self.meat
@@ -290,8 +357,8 @@ class World:
                       *sense(c, prey), *sense(c, threat)]
             dx, dy, eat, reproduce = c.think(inputs)
             old_key = index.key(c.x, c.y)
-            nx = max(0.01, min(WIDTH - 0.01, c.x + dx * dt * 2.4 * c.speed))
-            ny = max(0.01, min(HEIGHT - 0.01, c.y + dy * dt * 2.4 * c.speed))
+            nx = (c.x + dx * dt * 2.4 * c.mobility) % WIDTH
+            ny = max(0.01, min(HEIGHT - 0.01, c.y + dy * dt * 2.4 * c.mobility))
             if self.land(self.tile(nx, ny)):
                 c.x, c.y = nx, ny
                 index.move(c, old_key)
@@ -303,8 +370,8 @@ class World:
                 c.energy = min(185.0, c.energy + bite * (75 if c.diet == "herbivore" else 105))
                 if bite > 0.01:
                     c.action = "Ест растения" if c.diet == "herbivore" else "Ест останки"
-            c.energy -= dt * (2.1 * c.size + (abs(dx) + abs(dy)) * c.speed**2 * 0.9
-                              + c.vision * 0.06 + abs(temp - c.ideal_temp) * 0.16 + c.age * 0.008)
+            c.energy -= dt * (2.1 * c.size + (abs(dx) + abs(dy)) * c.speed**2 * 0.9 * (0.8 + 0.2 * c.elongation)
+                              + c.armor * 0.9 + c.vision * 0.06 + abs(temp - c.ideal_temp) * 0.16 + c.age * 0.008)
             if c.health <= 0 or c.energy <= 0 or c.age > 220:
                 retire(c, "age" if c.age > 220 else "starvation")
                 continue
@@ -313,7 +380,7 @@ class World:
             if c.diet == "carnivore" and eat > -0.4:
                 victim = index.nearest(c, "herbivore", 1.1)
                 if victim is not None:
-                    damage = min(victim.health, dt * 60 * c.size / victim.size)
+                    damage = min(victim.health, dt * 60 * c.size / victim.size / (1 + 1.6 * victim.armor))
                     victim.health -= damage
                     c.energy = min(185.0, c.energy + damage * 0.25)
                     c.action = "Атакует"
@@ -326,7 +393,7 @@ class World:
                 x, y = c.x, c.y
                 for _ in range(4):
                     angle = self.rng.uniform(0, math.tau)
-                    nx = max(0.01, min(WIDTH - 0.01, c.x + math.cos(angle)))
+                    nx = (c.x + math.cos(angle)) % WIDTH
                     ny = max(0.01, min(HEIGHT - 0.01, c.y + math.sin(angle)))
                     if self.land(self.tile(nx, ny)):
                         x, y = nx, ny
@@ -360,6 +427,46 @@ class World:
         self.history.append({"day": int(self.day), "population": len(self.creatures), **self.counts()})
         self.history = self.history[-240:]
 
+    def refresh_history(self):
+        sample = {"day": int(self.day), "population": len(self.creatures), **self.counts()}
+        if self.history and self.history[-1]["day"] == sample["day"]:
+            self.history[-1] = sample
+        else:
+            self.history.append(sample)
+            self.history = self.history[-240:]
+
+    def biome(self, tile: int) -> int:
+        """0 ocean, 1 coast, 2 tundra, 3 drylands, 4 grass, 5 forest, 6 wetland, 7 highland."""
+        altitude = self.elevation[tile] - self.config.sea_level
+        if altitude <= 0:
+            return 0
+        if altitude < 0.025:
+            return 1
+        if self.local_temperature(tile // WIDTH + 0.5, tile % WIDTH + 0.5) < 0:
+            return 2
+        if altitude > 0.28:
+            return 7
+        if self.moisture[tile] < 0.18 or self.soil[tile] < 0.18:
+            return 3
+        if altitude < 0.06 and self.moisture[tile] > 0.7:
+            return 6
+        return 5 if self.canopy[tile] > 0.55 else 4
+
+    def lineages(self) -> list[dict]:
+        """Living family groups, not species or a fabricated archive of dead ancestors."""
+        groups: dict[int, list[Creature]] = {}
+        for c in self.creatures:
+            groups.setdefault(c.lineage, []).append(c)
+        result = []
+        for identity, members in groups.items():
+            representative = max(members, key=lambda c: (c.generation, c.children, -c.id))
+            result.append({"id": identity, "complete": members[0].lineage_complete,
+                           "diet": members[0].diet, "population": len(members),
+                           "generation": representative.generation, "representative": representative.id,
+                           "mean_armor": round(sum(c.armor for c in members) / len(members), 3),
+                           "mean_elongation": round(sum(c.elongation for c in members) / len(members), 3)})
+        return sorted(result, key=lambda group: (-group["population"], group["id"]))
+
     def snapshot(self) -> dict:
         creatures = [{"id": c.id, "x": round(c.x, 3), "y": round(c.y, 3),
                       "hue": round(c.hue, 3), "energy": round(c.energy, 1),
@@ -368,14 +475,37 @@ class World:
                       "ideal_temp": round(c.ideal_temp, 1), "action": c.action,
                       "diet": c.diet, "speed": round(c.speed, 2), "size": round(c.size, 2),
                       "vision": round(c.vision, 1), "health": round(c.health, 1), "kills": c.kills,
+                      "local_temperature": round(self.local_temperature(c.y, c.x), 1),
+                      "local_moisture": round(self.moisture[self.tile(c.x, c.y)], 3),
+                      "local_rain": round(self.precipitation[self.tile(c.x, c.y)], 3),
+                      "elongation": round(c.elongation, 3), "armor": round(c.armor, 3),
+                      "mobility": round(c.mobility, 3), "lineage": c.lineage,
+                      "lineage_complete": c.lineage_complete,
                       "memory": [round(v, 3) for v in c.memory]}
                      for c in self.creatures]
-        return {"width": WIDTH, "height": HEIGHT, "config": asdict(self.config),
+        lineages = self.lineages()
+        return {"moisture": [round(v, 3) for v in self.moisture],
+                "rain": [round(v, 3) for v in self.precipitation],
+                "weather": {"moisture_percent": round(sum(self.moisture[i] for i in self.land_tiles) / len(self.land_tiles) * 100),
+                            "rain_percent": round(sum(self.precipitation[i] for i in self.land_tiles) / len(self.land_tiles) * 100),
+                            "drought_percent": round(sum(self.moisture[i] < 0.18 for i in self.land_tiles) / len(self.land_tiles) * 100)},
+                "lineages": lineages,
+                "evolution": {"lineages": len(lineages),
+                              "mean_armor": round(sum(c.armor for c in self.creatures) / len(self.creatures), 3) if self.creatures else 0.0,
+                              "mean_elongation": round(sum(c.elongation for c in self.creatures) / len(self.creatures), 3) if self.creatures else 0.0},
+                "width": WIDTH, "height": HEIGHT, "config": asdict(self.config),
                 "day": round(self.day, 2), "temperature": round(self.temperature, 1),
                 "population": len(creatures), **self.counts(),
-                "births": self.births, "deaths": self.deaths, "death_causes": self.death_causes.copy(),
+                "births": self.births, "deaths": self.deaths, "introduced": self.introduced, "death_causes": self.death_causes.copy(),
                 "generation": max((c.generation for c in self.creatures), default=0),
                 "food_percent": round(sum(self.food) / len(self.land_tiles) * 100),
+                "ecosystem": {"forest_percent": round(sum(self.canopy[i] > 0.55 for i in self.land_tiles) / len(self.land_tiles) * 100),
+                              "fertility_percent": round(sum(self.soil) / len(self.land_tiles) * 100),
+                              "occupied_tiles": len({self.tile(c.x, c.y) for c in self.creatures}),
+                              "biomass": round(sum(c.size for c in self.creatures), 1)},
+                "biomes": [self.biome(i) for i in range(WIDTH * HEIGHT)],
+                "temperature_bias": [round(v, 3) for v in self.temperature_bias],
+                "soil": [round(v, 3) for v in self.soil], "canopy": [round(v, 3) for v in self.canopy],
                 "elevation": [round(h, 5) for h in self.elevation],
                 "food": [round(f, 2) for f in self.food], "meat": [round(m, 3) for m in self.meat],
                 "creatures": creatures, "history": self.history.copy(), "events": self.events.copy()}

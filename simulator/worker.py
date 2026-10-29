@@ -15,7 +15,7 @@ if __package__ in (None, ""):
 
 from simulator.runtime import Simulation
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 7
 MAX_REQUEST_BYTES = 16384
 
 

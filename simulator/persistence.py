@@ -10,7 +10,8 @@ import tempfile
 from dataclasses import asdict, fields
 from pathlib import Path
 
-from .world import Config, Creature, DIETS, HEIGHT, HIDDEN, MAX_POPULATION, WEIGHTS, WIDTH, World
+from .weather import initial_moisture
+from .world import Config, Creature, DIETS, HEIGHT, HIDDEN, MAX_POPULATION, WEIGHTS, WIDTH, World, environment_fields
 
 MAX_SAVE_BYTES = 16 * 1024 * 1024
 
@@ -35,10 +36,13 @@ def array(value, length):
 
 
 def pack(world: World, paused: bool, speed: int) -> dict:
-    return {"format": 2, "config": asdict(world.config), "day": world.day,
+    return {"format": 6, "config": asdict(world.config), "day": world.day,
             "births": world.births, "deaths": world.deaths, "next_id": world.next_id,
+            "introduced": world.introduced, "temperature_bias": world.temperature_bias,
+            "moisture": world.moisture, "rain_bias": world.rain_bias,
             "death_causes": world.death_causes,
             "elevation": world.elevation, "food": world.food, "meat": world.meat,
+            "soil": world.soil, "canopy": world.canopy,
             "creatures": [asdict(c) for c in world.creatures],
             "rng": world.rng.getstate(), "history": world.history, "events": world.events,
             "paused": paused, "speed": speed}
@@ -71,12 +75,64 @@ def migrate_v1(data: dict) -> dict:
     return upgraded
 
 
+MORPHOLOGY_FIELDS = {"elongation", "armor", "lineage", "lineage_complete"}
+
+
+def migrate_v4(data: dict) -> dict:
+    """Neutral bodies; recover only ancestry actually present in the legacy save.
+
+    A missing parent's ID is a shared anchor for its surviving children, NOT a
+    claim that it was the founder. Monotone parent IDs make this iterative/DAG-safe.
+    """
+    upgraded = copy.deepcopy(data)
+    records = upgraded["creatures"]
+    if not isinstance(records, list) or len(records) > MAX_POPULATION:
+        raise ValueError("Неверная популяция старого мира")
+    legacy_fields = {item.name for item in fields(Creature)} - MORPHOLOGY_FIELDS
+    by_id = {}
+    for record in records:
+        if not isinstance(record, dict) or record.keys() != legacy_fields:
+            raise ValueError("Неверная старая запись существа")
+        identity = integer(record["id"], 1, 10**12)
+        if identity in by_id:
+            raise ValueError("Повторяющийся ID существа")
+        if record["parent"] is not None:
+            integer(record["parent"], 1, identity - 1)
+        by_id[identity] = record
+    for identity in sorted(by_id):
+        record = by_id[identity]
+        parent = by_id.get(record["parent"])
+        record.update(elongation=1.0, armor=0.0,
+                      lineage=parent["lineage"] if parent else (record["parent"] or identity),
+                      lineage_complete=parent["lineage_complete"] if parent else record["parent"] is None)
+    upgraded["format"] = 5
+    return upgraded
+
+
 def unpack(data: dict) -> tuple[World, bool, int]:
     try:
-        if not isinstance(data, dict) or type(data.get("format")) is not int or data["format"] not in (1, 2):
+        if not isinstance(data, dict) or type(data.get("format")) is not int or data["format"] not in (1, 2, 3, 4, 5, 6):
             raise ValueError("Неизвестный формат сохранения")
         if data["format"] == 1:
             data = migrate_v1(data)
+        if data["format"] == 2:
+            data = copy.deepcopy(data)
+            config = Config.parse(data["config"])
+            elevations = array(data["elevation"], WIDTH * HEIGHT)
+            foods = array(data["food"], WIDTH * HEIGHT)
+            for value in elevations + foods:
+                number(value, 0, 1)
+            data["soil"], data["canopy"] = environment_fields(config, elevations, foods)
+            data["format"] = 3
+            data["events"] = (data["events"] + ["Мир обновлён до v3: добавлены почвы, сукцессия и круговая долгота."])[-20:]
+        if data["format"] == 3:
+            data = copy.deepcopy(data)
+            data["introduced"] = 0
+            data["temperature_bias"] = [0.0] * (WIDTH * HEIGHT)
+            data["death_causes"]["intervention"] = 0
+            data["format"] = 4
+        if data["format"] == 4:
+            data = migrate_v4(data)
         if not isinstance(data["config"], dict) or data["config"].keys() != asdict(Config()).keys():
             raise ValueError("Неполные параметры мира")
         config = Config.parse(data["config"])
@@ -84,6 +140,8 @@ def unpack(data: dict) -> tuple[World, bool, int]:
         world.day = float(number(data["day"], 0, 10**12))
         world.births = integer(data["births"], 0, 10**12)
         world.deaths = integer(data["deaths"], 0, 10**12)
+        world.introduced = integer(data["introduced"], 0, 10**12)
+        world.temperature_bias = [float(number(v, -40, 40)) for v in array(data["temperature_bias"], WIDTH * HEIGHT)]
         world.next_id = integer(data["next_id"], 1, 10**12)
         causes = data["death_causes"]
         if not isinstance(causes, dict) or causes.keys() != world.death_causes.keys():
@@ -94,11 +152,22 @@ def unpack(data: dict) -> tuple[World, bool, int]:
         world.elevation = [float(number(v, 0, 1)) for v in array(data["elevation"], WIDTH * HEIGHT)]
         world.food = [float(number(v, 0, 1)) for v in array(data["food"], WIDTH * HEIGHT)]
         world.meat = [float(number(v, 0, 3)) for v in array(data["meat"], WIDTH * HEIGHT)]
+        world.soil = [float(number(v, 0, 1)) for v in array(data["soil"], WIDTH * HEIGHT)]
+        world.canopy = [float(number(v, 0, 1)) for v in array(data["canopy"], WIDTH * HEIGHT)]
+        if data["format"] == 5:
+            world.moisture = initial_moisture(config, world.elevation)
+            world.rain_bias = [0.0] * (WIDTH * HEIGHT)
+        else:
+            world.moisture = [float(number(v, 0, 1)) for v in array(data["moisture"], WIDTH * HEIGHT)]
+            world.rain_bias = [float(number(v, 0, 1)) for v in array(data["rain_bias"], WIDTH * HEIGHT)]
+        world.refresh_weather()
         world.land_tiles = [i for i in range(WIDTH * HEIGHT) if world.land(i)]
         if not world.land_tiles:
             raise ValueError("В сохранении нет суши")
-        if any(world.food[i] != 0 or world.meat[i] != 0 for i in range(WIDTH * HEIGHT) if not world.land(i)):
+        if any(world.food[i] != 0 or world.meat[i] != 0 or world.soil[i] != 0 or world.canopy[i] != 0 for i in range(WIDTH * HEIGHT) if not world.land(i)):
             raise ValueError("Ресурсы не могут находиться в океане")
+        if any(world.moisture[i] != 1.0 for i in range(WIDTH * HEIGHT) if not world.land(i)):
+            raise ValueError("В океане запас влаги должен быть полным")
         creatures = data["creatures"]
         if not isinstance(creatures, list) or len(creatures) > MAX_POPULATION:
             raise ValueError("Превышен предел популяции")
@@ -115,14 +184,21 @@ def unpack(data: dict) -> tuple[World, bool, int]:
             if c.id in ids:
                 raise ValueError("Повторяющийся ID существа")
             ids.add(c.id)
-            number(c.x, 0, WIDTH - 0.000001)
-            number(c.y, 0, HEIGHT - 0.000001)
+            number(c.x, 0, WIDTH)
+            number(c.y, 0, HEIGHT)
+            if c.x >= WIDTH or c.y >= HEIGHT:
+                raise ValueError("Координаты организма за границей сетки")
             if not world.land(world.tile(c.x, c.y)):
                 raise ValueError("Существо оказалось в океане")
             for weight in array(c.brain, WEIGHTS):
                 number(weight, -100, 100)
             if c.diet not in DIETS:
                 raise ValueError("Неизвестный тип питания")
+            number(c.elongation, 0.65, 1.8)
+            number(c.armor, 0, 1)
+            integer(c.lineage, 1, c.id)
+            if type(c.lineage_complete) is not bool:
+                raise ValueError("Неверная полнота родословной")
             number(c.speed, 0.6, 1.8)
             number(c.size, 0.6, 1.5)
             number(c.vision, 3, 12)
@@ -144,12 +220,28 @@ def unpack(data: dict) -> tuple[World, bool, int]:
             integer(c.children, 0, world.births)
             if c.parent is not None:
                 integer(c.parent, 1, c.id - 1)
+            if c.parent is None:
+                if c.lineage != c.id or not c.lineage_complete or c.generation != 1:
+                    raise ValueError("Неверная линия основателя")
+            elif c.lineage > c.parent:
+                raise ValueError("Линия не может начинаться после родителя")
             if c.action not in actions:
                 raise ValueError("Неизвестное действие существа")
             world.creatures.append(c)
+        by_id = {c.id: c for c in world.creatures}
+        families = {}
+        for c in world.creatures:
+            parent = by_id.get(c.parent)
+            if parent and (c.lineage != parent.lineage or c.lineage_complete != parent.lineage_complete
+                           or c.diet != parent.diet or c.generation != parent.generation + 1):
+                raise ValueError("Нарушено наследование родственной линии")
+            identity = (c.diet, c.lineage_complete)
+            if c.lineage in families and families[c.lineage] != identity:
+                raise ValueError("Противоречивые данные родственной линии")
+            families[c.lineage] = identity
         if sum(c.kills for c in world.creatures) > world.death_causes["predation"]:
             raise ValueError("Неверное число успешных охот")
-        if len(creatures) != config.population + world.births - world.deaths:
+        if len(creatures) != config.population + world.births + world.introduced - world.deaths:
             raise ValueError("Нарушен баланс популяции")
         history = data["history"]
         if not isinstance(history, list) or not 1 <= len(history) <= 240:
@@ -188,9 +280,14 @@ def unpack(data: dict) -> tuple[World, bool, int]:
 
 
 def save(world: World, paused: bool, speed: int, path: str) -> None:
+    write_payload(pack(world, paused, speed), path)
+
+
+def write_payload(data: dict, path: str) -> None:
+    """Shared atomic writer for manual saves and independently replaceable backups."""
     target = Path(path).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(pack(world, paused, speed), ensure_ascii=True, allow_nan=False)
+    text = json.dumps(data, ensure_ascii=True, allow_nan=False)
     if len(text.encode("utf-8")) > MAX_SAVE_BYTES:
         raise ValueError("Сохранение превышает 16 МБ")
     temporary = None
@@ -206,12 +303,16 @@ def save(world: World, paused: bool, speed: int, path: str) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def load(path: str) -> tuple[World, bool, int]:
+def read_payload(path: str) -> dict:
     with Path(path).expanduser().open("rb") as stream:
         raw = stream.read(MAX_SAVE_BYTES + 1)
     if len(raw) > MAX_SAVE_BYTES:
         raise ValueError("Сохранение превышает 16 МБ")
     try:
-        return unpack(json.loads(raw))
+        return json.loads(raw)
     except (UnicodeError, RecursionError) as exc:
         raise ValueError("Нечитаемый файл сохранения") from exc
+
+
+def load(path: str) -> tuple[World, bool, int]:
+    return unpack(read_payload(path))
