@@ -10,7 +10,7 @@ import tempfile
 from dataclasses import asdict, fields
 from pathlib import Path
 
-from . import earth as earth_model
+from . import earth as earth_model, ocean as ocean_model
 from .intelligence import new_experience, validate_experience
 from .behavior import validate_observations
 from .weather import initial_moisture
@@ -39,8 +39,8 @@ def array(value, length):
 
 
 def pack(world: World, paused: bool, speed: int) -> dict:
-    return {"format": 9, "config": asdict(world.config), "day": world.day,
-            "earth": world.earth,
+    return {"format": 10, "config": asdict(world.config), "day": world.day,
+            "earth": world.earth, "ocean": ocean_model.pack(world.ocean),
             "births": world.births, "deaths": world.deaths, "next_id": world.next_id,
             "introduced": world.introduced, "temperature_bias": world.temperature_bias,
             "moisture": world.moisture, "rain_bias": world.rain_bias,
@@ -117,7 +117,7 @@ def migrate_v4(data: dict) -> dict:
 
 def unpack(data: dict) -> tuple[World, bool, int]:
     try:
-        if not isinstance(data, dict) or type(data.get("format")) is not int or data["format"] not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
+        if not isinstance(data, dict) or type(data.get("format")) is not int or data["format"] not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
             raise ValueError("Неизвестный формат сохранения")
         if data["format"] == 1:
             data = migrate_v1(data)
@@ -309,6 +309,7 @@ def unpack(data: dict) -> tuple[World, bool, int]:
                 raise ValueError("Несогласованные геологические часы")
             if any(any(getattr(world, key)) for key in ("food", "leaves", "seeds", "meat", "soil", "canopy", "temperature_bias", "rain_bias")):
                 raise ValueError("В ранней Земле не должно быть готовой экосистемы или ручных поправок")
+        world.ocean = ocean_model.unpack(data["ocean"], world) if data["format"] >= 10 else None
         return world, data["paused"], data["speed"]
     except (KeyError, TypeError, OverflowError, AttributeError) as exc:
         raise ValueError("Повреждённое или неполное сохранение") from exc

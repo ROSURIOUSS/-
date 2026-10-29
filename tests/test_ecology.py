@@ -171,7 +171,7 @@ class SaveCompatibilityTests(unittest.TestCase):
         for _ in range(32):
             world.step()
         data = json.loads(json.dumps(pack(world, True, 5)))
-        self.assertEqual(data["format"], 9)
+        self.assertEqual(data["format"], 10)
         restored, paused, speed = unpack(data)
         self.assertTrue(paused)
         self.assertEqual(speed, 5)

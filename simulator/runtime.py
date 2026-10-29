@@ -1,7 +1,7 @@
 """Application core, driven by the native window. No network or web server."""
 from __future__ import annotations
 
-from . import autosave, persistence
+from . import autosave, persistence, ocean
 from .sandbox import Sandbox
 from .world import Config, World
 
@@ -33,6 +33,21 @@ class Simulation:
             self.world, self.paused, self.error = world, True, None
             self.sandbox.clear()
             return "Ранняя Земля создана без жизни. Нажмите «Продолжить»: 5 млн лет за шаг. Это упрощённый сценарий, не полная история Земли."
+        elif name == "ocean_begin":
+            if data:
+                raise ValueError("У запуска первой клетки нет параметров")
+            state = ocean.new_ocean(self.world)
+            self.world.ocean, self.paused, self.error = state, True, None
+            self.world.events.append("Первая водная клетка введена явным правилом модели, не получена химическим абиогенезом.")
+            self.world.events = self.world.events[-20:]
+            self.sandbox.clear()
+            return "Водная микросреда создана: одна клетка, 400 × 240 мкм. Геологическое время заморожено, теперь шаг = 0.25 модельного часа."
+        elif name == "ocean_feed":
+            if self.world.ocean is None or data.keys() != {"rate"}:
+                raise ValueError("Нужна активная водная микросреда и скорость подачи")
+            rate = persistence.number(data['rate'], 0, 1)
+            self.world.ocean['feed_rate'] = float(rate)
+            return "Подача растворённого питания изменена"
         elif name == "control":
             if data.keys() - {"paused", "speed"}:
                 raise ValueError("Неизвестная команда времени")
@@ -64,6 +79,8 @@ class Simulation:
                 if self.error is not None:
                     raise ValueError("Автосохранение остановлено из-за ошибки расчёта; прежние копии сохранены")
                 self.autosaves = autosave.save(self.world, self.paused, self.speed, root)
+                if self.world.ocean is not None:
+                    return "Автокопия водной микросреды: %.2f ч" % self.world.ocean["hours"]
                 return ("Автокопия ранней Земли: %.0f млн лет после формирования" % self.world.earth["age_myr"]) if self.world.earth is not None else "Автокопия сохранена: день %.2f" % self.world.day
             else:
                 if "slot" in data:
@@ -74,12 +91,14 @@ class Simulation:
                 self.world, self.paused, self.speed, self.error = world, True, speed, None
                 self.autosaves = info
                 self.sandbox.clear()
+                if world.ocean is not None:
+                    return "Водная микросреда восстановлена: %.2f ч. Мир на паузе" % world.ocean["hours"]
                 if world.earth is not None:
                     return "Ранняя Земля восстановлена: %.0f млн лет после формирования. Мир на паузе" % world.earth["age_myr"]
                 return f"Автокопия восстановлена: день {world.day:.2f}. Мир на паузе"
         elif name == "brush":
             if self.world.earth is not None:
-                raise ValueError("Кисти отключены в добиологическом сценарии. Для вмешательств создайте обычную песочницу.")
+                raise ValueError("Наземные кисти отключены в сценарии ранней Земли и водной микросреды. Для вмешательств создайте обычную песочницу.")
             return self.sandbox.apply(self.world, data, self.paused, self.speed)
         elif name == "undo":
             if data:
@@ -95,7 +114,7 @@ class Simulation:
                 try:
                     for _ in range(1 if single else self.speed):
                         self.world.step()
-                        if self.world.earth is not None and self.world._earth_surface["complete"]:
+                        if self.world.earth is not None and self.world.ocean is None and self.world._earth_surface["complete"]:
                             self.paused = True
                             break
                 except Exception as exc:

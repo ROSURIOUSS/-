@@ -10,6 +10,14 @@ from __future__ import annotations
 import copy
 import math
 
+
+try:
+    from math import sumprod as dot
+except ImportError:
+    from operator import mul
+    def dot(left, right):
+        return sum(map(mul, left, right))
+
 FEATURES, ACTIONS = 25, 4
 PARAMETERS = FEATURES * ACTIONS
 SIGMA = 0.15
@@ -117,3 +125,15 @@ def validate_experience(state):
     for key in ("reward", "baseline"):
         number(state[key], 1)
     return copy.deepcopy(state)
+
+
+def recurrent_decision(brain, memory, experience, inputs):
+    """Shared computation, private weights/memory/experience for each organism."""
+    hidden = []
+    for offset in range(0, 200, 25):
+        total = dot(inputs, brain[offset:offset + 16])
+        total += dot(memory, brain[offset + 16:offset + 24])
+        hidden.append(math.tanh(total + brain[offset + 24]))
+    logits = [dot(hidden, brain[offset:offset + 8]) + brain[offset + 8]
+              for offset in range(200, 236, 9)]
+    return hidden, act(experience, inputs, hidden, logits)

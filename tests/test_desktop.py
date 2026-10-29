@@ -133,7 +133,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(result.stderr, b'')
         packets = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(packets[0], {"type": "ready", "protocol": 11})
+        self.assertEqual(packets[0], {"type": "ready", "protocol": 12})
         return packets[1:]
 
     def test_actual_process_commands_and_graceful_quit(self):

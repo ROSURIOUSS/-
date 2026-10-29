@@ -190,13 +190,14 @@ func receive_command(command: String, success: bool, message: String) -> void:
 			_phase = "choosing"
 			_update_dialog()
 			_dialog.popup_centered()
-	elif success and command in ["world", "earth", "load", "undo"]:
+	elif success and command in ["world", "earth", "ocean_begin", "ocean_feed", "load", "undo"]:
 		_version += 1
 
 func update_world(data: Dictionary) -> void:
 	_last_state = data
 	var fingerprint: Array = [data["config"].duplicate(true), data["day"], data["sandbox"]["dabs"],
-		data["births"], data["deaths"], data["introduced"], data["paused"], data["speed"]]
+		data["births"], data["deaths"], data["introduced"], data["paused"], data["speed"], data.get("ocean", {}).get("hours") if data.get("ocean") is Dictionary else null,
+		data.get("ocean", {}).get("feed_rate") if data.get("ocean") is Dictionary else null]
 	if fingerprint != _fingerprint:
 		_version += 1
 		_fingerprint = fingerprint
@@ -296,4 +297,6 @@ func _finish_startup(resume: bool) -> void:
 		command_requested.emit("control", {"paused": false})
 
 func _record_time(record: Dictionary) -> String:
+	if record.get("ocean_hours") != null:
+		return "микросреда %.2f ч" % float(record["ocean_hours"])
 	return "%.0f млн лет после формирования" % float(record["earth_age_myr"]) if record.get("earth_age_myr") != null else "день %.2f" % float(record["day"])

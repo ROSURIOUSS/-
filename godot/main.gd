@@ -1,6 +1,7 @@
 extends Control
 ## Native desktop application. Owns its Python worker through private OS pipes.
 
+const OceanView = preload("res://ocean_view.gd")
 const WorldView = preload("res://world_view.gd")
 const PopulationChart = preload("res://population_chart.gd")
 const SavePanel = preload("res://save_panel.gd")
@@ -23,6 +24,12 @@ var load_dialog: FileDialog
 var snapshot: Dictionary = {}
 var inputs: Dictionary = {}
 var map_view: WorldView
+var ocean_view: OceanView
+var ocean_button: Button
+var ocean_dialog: ConfirmationDialog
+var ocean_feed: SpinBox
+var graph_title: Label
+var graph_legend: Label
 var chart: PopulationChart
 var stats: Label
 var connection: Label
@@ -73,6 +80,9 @@ func restart_core() -> void:
 	error_label.visible = false
 	snapshot.clear()
 	map_view.update_world({})
+	ocean_view.update_world({})
+	ocean_view.reset_view()
+	set_observation_scale(0)
 	lineage_panel.update_world({}, -1)
 	chart.history = []
 	chart.queue_redraw()
@@ -111,6 +121,10 @@ func set_controls_enabled(enabled: bool) -> void:
 	if not enabled:
 		map_view.stop_stroke()
 	create_button.disabled = not enabled
+	ocean_button.visible = geological and snapshot.get("ocean") == null
+	ocean_button.disabled = not enabled or not geological or not snapshot["earth"]["complete"]
+	ocean_feed.editable = enabled and snapshot.get("ocean") is Dictionary
+	ocean_feed.visible = snapshot.get("ocean") is Dictionary
 	earth_button.disabled = not enabled
 	pause_button.disabled = not enabled or (geological and snapshot["earth"]["complete"])
 	speed_select.disabled = not enabled
@@ -270,6 +284,24 @@ func build_ui() -> void:
 	earth_dialog.dialog_text = "Это заменит текущий мир без переноса существ.\nСначала сохраните важный прогресс.\n\nСценарий: 0–600 млн лет после формирования, без жизни.\nОстывание задано формулой, это не полная история Земли."
 	earth_dialog.confirmed.connect(func(): send_command("earth", {"seed": int(inputs["seed"].value)}))
 	add_child(earth_dialog)
+	ocean_button = Button.new()
+	ocean_button.text = "Продолжить: первая водная клетка…"
+	ocean_button.tooltip_text = "Доступно после остывания до 600 млн лет. Вводит одну клетку явным правилом, не химическим абиогенезом."
+	ocean_button.pressed.connect(func(): ocean_dialog.popup_centered())
+	sidebar.add_child(ocean_button)
+	ocean_dialog = ConfirmationDialog.new()
+	ocean_dialog.title = "Начать локальную водную микросреду?"
+	ocean_dialog.dialog_text = "Будет явно задана ОДНА первая клетка в участке воды 400 × 240 мкм.\nЭто условие эксперимента, НЕ рассчитанное происхождение жизни.\n\nУ каждой клетки своя нейросеть, память и обучение.\nПитание и скорости условны, лимит — 128 клеток.\nЧасы микросреды заменяют геологический ход времени.\nЭто не весь океан и не вся история Земли."
+	ocean_dialog.confirmed.connect(func(): send_command("ocean_begin", {}))
+	add_child(ocean_dialog)
+	ocean_feed = SpinBox.new()
+	ocean_feed.min_value = 0
+	ocean_feed.max_value = 1
+	ocean_feed.step = 0.01
+	ocean_feed.prefix = "Подача питания / ч: "
+	ocean_feed.tooltip_text = "0 — без пополнения. Условные единицы насыщения в час; не химическая концентрация. Применяется сразу."
+	ocean_feed.value_changed.connect(func(value: float): send_command("ocean_feed", {"rate": value}))
+	sidebar.add_child(ocean_feed)
 	sidebar.add_child(label_for("Заменит текущую симуляцию.\nПараметры применяются при создании.\n\nНейросеть: 16 → 8 ↺ → 4.\n8 состояний кратковременной памяти.\nПотомки наследуют её с мутациями.\n\nПробел — пауза. F11 — полный экран.\nCtrl+S / Ctrl+O — сохранить / загрузить.", 12, MUTED))
 	var main := VBoxContainer.new()
 	main.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -291,7 +323,7 @@ func build_ui() -> void:
 	scale_select = OptionButton.new()
 	for title in ["Орбита", "Регион", "Микромир"]:
 		scale_select.add_item(title)
-	scale_select.item_selected.connect(func(index: int): map_view.set_scale_level(index))
+	scale_select.item_selected.connect(set_observation_scale)
 	toolbar.add_child(scale_select)
 	pause_button = Button.new()
 	pause_button.text = "Пауза"
@@ -323,7 +355,17 @@ func build_ui() -> void:
 		update_inspector()
 		lineage_panel.update_world(snapshot, map_view.tracked_lineage)
 	)
+	map_view.microscope_requested.connect(func(): set_observation_scale(2))
 	main.add_child(map_view)
+	ocean_view = OceanView.new()
+	ocean_view.visible = false
+	ocean_view.cell_selected.connect(func(_identity: int):
+		_toggle_analytics(true)
+		analytics_button.set_pressed_no_signal(true)
+		update_inspector()
+	)
+	ocean_view.return_to_planet.connect(func(): set_observation_scale(1))
+	main.add_child(ocean_view)
 	error_label = label_for("", 13, Color("f0cc9e"))
 	error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	error_label.visible = false
@@ -339,8 +381,10 @@ func build_ui() -> void:
 	main.add_child(details)
 	var graph_box := panel_for(details)
 	(graph_box.get_parent() as Control).size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	graph_box.add_child(label_for("Популяция / последние 240 дней", 13, MUTED))
-	graph_box.add_child(label_for("Серый: все · Зелёный: травоядные · Рыжий: хищники", 11, MUTED))
+	graph_title = label_for("Популяция / последние 240 дней", 13, MUTED)
+	graph_legend = label_for("Серый: все · Зелёный: травоядные · Рыжий: хищники", 11, MUTED)
+	graph_box.add_child(graph_title)
+	graph_box.add_child(graph_legend)
 	chart = PopulationChart.new()
 	graph_box.add_child(chart)
 	var inspect_box := panel_for(details)
@@ -432,7 +476,17 @@ func add_parameter(parent: VBoxContainer, title: String, key: String, low: float
 	parent.add_child(spin)
 	inputs[key] = spin
 
+func set_observation_scale(index: int) -> void:
+	var microscopic := index == 2 and snapshot.get("ocean") is Dictionary
+	ocean_view.visible = microscopic
+	map_view.visible = not microscopic
+	scale_select.select(index)
+	if not microscopic:
+		map_view.set_scale_level(index)
+	update_inspector()
+
 func receive_state(data: Dictionary) -> void:
+	var entering_ocean := data.get("ocean") is Dictionary and (snapshot.get("ocean") == null or _sync_parameters)
 	snapshot = data
 	if _sync_parameters:
 		for key: String in inputs:
@@ -452,32 +506,54 @@ func receive_state(data: Dictionary) -> void:
 	weather_label.text = "ОСАДКИ %d%%   /   ВЛАГА ПОЧВЫ %d%%   /   ЗАСУХА НА %d%% СУШИ" % [data["weather"]["rain_percent"], data["weather"]["moisture_percent"], data["weather"]["drought_percent"]]
 	clock.text = "День %d · %s" % [int(data["day"]), season_name(float(data["day"]))]
 	var earth = data.get("earth")
-	scale_select.set_item_text(2, "Поверхность" if earth is Dictionary else "Микромир")
+	scale_select.set_item_text(2, "Поверхность" if earth is Dictionary and data.get("ocean") == null else "Микромир")
 	if earth is Dictionary:
 		stats.text = "РАННЯЯ ЗЕМЛЯ · %.0f млн лет после формирования\n%.1f °C · Твёрдая кора %.0f%% · Океан %.0f%% поверхности" % [float(earth["age_myr"]), float(earth["temperature_c"]), float(earth["solid_fraction"]) * 100, float(earth["ocean_percent"])]
 		ecosystem_label.text = "УПРОЩЁННЫЙ СЦЕНАРИЙ / " + str(earth["phase"])
 		weather_label.text = "Радиус 6 371 км · Рельеф до 8 км · Без существ, растений и готовой почвы"
 		clock.text = "%.2f млрд лет назад · 5 млн лет/шаг" % (float(earth["years_ago_myr"]) / 1000.0)
 		if earth["complete"]:
-			show_error("Конец реализованного сценария. Дальнейшее происхождение и развитие жизни ещё не добавлено.")
+			show_error("Земля остыла. Для явного запуска одной клетки нажмите «Продолжить: первая водная клетка…». Химическое происхождение жизни не моделируется.")
 		brush_select.select(0)
 		update_brush()
+	var ocean = data.get("ocean")
+	if ocean is Dictionary:
+		stats.text = "ВОДНАЯ МИКРОСРЕДА · %d клеток / %d максимум\nПоявилось делением %d · Погибло %d · Температура %.1f °C" % [ocean["cells"].size(), ocean["limit"], ocean["births"], ocean["deaths"], data["temperature"]]
+		ecosystem_label.text = "ЛОКАЛЬНЫЙ УЧАСТОК 400 × 240 мкм · Первая клетка введена явно, не химическим абиогенезом"
+		weather_label.text = "Движение / питание / деление / личное обучение · Размер исходной клетки 4 мкм · Не весь океан"
+		clock.text = "Микросреда: %.2f ч · 0.25 модельного часа/шаг · Земля: %.0f млн лет (заморожено)" % [ocean["hours"], earth["age_myr"]]
+		ocean_feed.set_value_no_signal(float(ocean["feed_rate"]))
+		if ocean["cells"].is_empty():
+			show_error("Клетки вымерли. Автоматического заселения нет; можно восстановить сохранение или начать новый сценарий Земли.")
 	pause_button.text = "Продолжить" if data["paused"] else "Пауза"
 	for index in range(speed_select.item_count):
 		if speed_select.get_item_id(index) == int(data["speed"]):
 			speed_select.select(index)
 	map_view.update_world(data)
 	lineage_panel.update_world(data, map_view.tracked_lineage)
-	chart.history = data["history"]
+	ocean_view.update_world(data)
+	if entering_ocean:
+		set_observation_scale(2)
+	else:
+		ocean_view.visible = ocean is Dictionary and scale_select.selected == 2
+		map_view.visible = not ocean_view.visible
+	lineage_panel.visible = ocean == null
+	chart.history = ocean["history"] if ocean is Dictionary else data["history"]
+	chart.series_names = ["population"] if ocean is Dictionary else ["population", "herbivores", "carnivores"]
+	graph_title.text = "Клетки / последние 240 модельных часов" if ocean is Dictionary else "Популяция / последние 240 дней"
+	graph_legend.text = "Только локальные клетки · не численность океана" if ocean is Dictionary else "Серый: все · Зелёный: травоядные · Рыжий: хищники"
 	chart.queue_redraw()
 	var events: Array = data["events"]
 	journal.text = "Родилось %d · Заселено %d · Погибло %d (голод %d / возраст %d / охота %d / вмешательство %d / старые %d)\n%s" % [data["births"], data["introduced"], data["deaths"], data["death_causes"]["starvation"], data["death_causes"]["age"], data["death_causes"]["predation"], data["death_causes"]["intervention"], data["death_causes"]["legacy"], str(events.back()) if not events.is_empty() else "Мир развивается."]
+	if ocean is Dictionary:
+		journal.text = "Введена 1 клетка · Делений %d · Смертей %d · Живых %d\nРесурсы и скорости иллюстративны; сложная жизнь ещё не реализована." % [ocean["births"], ocean["deaths"], ocean["cells"].size()]
 	update_inspector()
 	save_panel.update_world(data)
 
 func _toggle_analytics(enabled: bool) -> void:
 	details_panel.visible = enabled
 	map_view.custom_minimum_size.y = 250 if enabled else 360
+	ocean_view.custom_minimum_size.y = 250 if enabled else 360
 
 
 func season_name(day: float) -> String:
@@ -485,6 +561,18 @@ func season_name(day: float) -> String:
 
 func update_inspector() -> void:
 	neural_activity.activations = []
+	if snapshot.get("ocean") is Dictionary:
+		inspector.text = "Выберите клетку ЛКМ в микромире.\nТело — в масштабе мкм; кольцо выбора условно."
+		for cell: Dictionary in snapshot["ocean"]["cells"]:
+			if int(cell["id"]) == ocean_view.selected_id:
+				var intelligence: Dictionary = cell["intelligence"]
+				inspector.text = "Водная клетка #%d · Поколение %d · Родитель %s\nДиаметр %.2f мкм · Возраст %.2f ч\nЭнергия %.2f · Порог деления %.1f\nПоглощено за шаг %.4f усл. ед.\n%s\n\nЛИЧНАЯ НЕЙРОСЕТЬ 16 → 8 ↺ → 4\nОпыт %d шагов · Награда %+.3f · Изменение слоя %.3f\nПотомки наследуют геном, но не выученный слой." % [cell["id"], cell["generation"], str(cell["parent"]) if cell["parent"] != null else "—", cell["diameter_um"], cell["age"], cell["energy"], cell["threshold"], cell["absorbed"], cell["action"], intelligence["updates"], intelligence["reward"], intelligence["adaptation"]]
+				if not cell["outputs"].is_empty():
+					inspector.text += "\nВЫХОДЫ / X %+.2f · Y %+.2f\nПоглощение %+.2f · Деление %+.2f" % cell["outputs"]
+				neural_activity.activations = cell["memory"]
+				break
+		neural_activity.queue_redraw()
+		return
 	if map_view.selected_id == -1:
 		inspector.text = "Нажмите на существо:\n○ травоядные / △ хищники."
 		neural_activity.queue_redraw()
@@ -558,7 +646,7 @@ func send_command(command: String, data: Dictionary) -> void:
 		show_error("Ядро не готово. Команда не отправлена.")
 		return
 	map_view.stop_stroke()
-	if command in ["world", "earth", "load", "save", "undo", "autosave", "autosave_info", "recover"]:
+	if command in ["world", "earth", "ocean_begin", "load", "save", "undo", "autosave", "autosave_info", "recover"]:
 		_blocking_requests += 1
 		set_controls_enabled(false)
 	bridge.submit(command, data)
@@ -571,7 +659,7 @@ func receive_command(command: String, success: bool, message: String) -> void:
 			sandbox_status.text = message
 			error_label.visible = false
 			return
-	if command in ["world", "earth", "load", "save", "undo", "autosave", "autosave_info", "recover"]:
+	if command in ["world", "earth", "ocean_begin", "load", "save", "undo", "autosave", "autosave_info", "recover"]:
 		_blocking_requests = maxi(0, _blocking_requests - 1)
 	if not success:
 		if command == "save":
@@ -579,7 +667,8 @@ func receive_command(command: String, success: bool, message: String) -> void:
 		set_controls_enabled(_blocking_requests == 0)
 		show_error(message)
 		return
-	if command in ["world", "earth", "load", "recover"]:
+	if command in ["world", "earth", "ocean_begin", "load", "recover"]:
+		ocean_view.reset_view()
 		brush_select.select(0)
 		update_brush()
 		map_view.selected_id = -1
@@ -600,7 +689,7 @@ func receive_command(command: String, success: bool, message: String) -> void:
 		call_deferred("finish_quit")
 
 func _process(_delta: float) -> void:
-	save_panel.interaction_busy = map_view._painting or map_view._brush_pending or save_dialog.visible or load_dialog.visible or exit_dialog.visible or earth_dialog.visible
+	save_panel.interaction_busy = map_view._painting or map_view._brush_pending or save_dialog.visible or load_dialog.visible or exit_dialog.visible or earth_dialog.visible or ocean_dialog.visible
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and not _quitting and not _exit_after_save:

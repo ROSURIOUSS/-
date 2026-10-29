@@ -74,7 +74,8 @@ def read_slot(root: Path, slot: int):
         raise ValueError("У времени автосохранения нет часового пояса")
     record = {"slot": slot, "generation": generation, "utc": stamp,
               "day": world.day, "earth_age_myr": world.earth["age_myr"] if world.earth is not None else None,
-              "population": len(world.creatures), "seed": world.config.seed,
+              "ocean_hours": world.ocean["hours"] if world.ocean is not None else None,
+              "population": len(world.ocean["cells"]) if world.ocean is not None else len(world.creatures), "seed": world.config.seed,
               "path": str(path)}
     return record, world, paused, speed
 

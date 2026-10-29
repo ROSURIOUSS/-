@@ -1,6 +1,7 @@
 extends Control
 ## One real 3D planet, one Python world. Camera scale never spawns another world.
 signal creature_selected(id: int)
+signal microscope_requested
 signal scale_changed(description: String)
 signal brush_requested(data: Dictionary)
 const Geometry = preload("res://planet_geometry.gd")
@@ -607,6 +608,8 @@ func _update_camera(delta: float) -> void:
 	if track_lineage and tracked_lineage >= 0:
 		description += " · ЛИНИЯ #%d%s" % [tracked_lineage, "" if _lineage_alive else " (ИСЧЕЗЛА)"]
 	_hud.text = description + "  /  ×%.0f" % (13.0 / _altitude)
+	if snapshot.get("ocean") is Dictionary:
+		_hud.text += "\nКолесо до поверхности → локальный водный микроскоп (смена метрического масштаба)"
 	if early_earth:
 		_hud.text += "\nВЫСОТА %.1f км · РАДИУС 6 371 км\nРельеф без игрового увеличения · сетка 80 × 48" % (_altitude * float(snapshot["earth"]["radius_m"]) / Geometry.RADIUS / 1000.0)
 	if not snapshot.is_empty():
@@ -755,6 +758,10 @@ func _gui_input(event: InputEvent) -> void:
 			_follow = false
 			accept_event()
 		if event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			if event.button_index == MOUSE_BUTTON_WHEEL_UP and snapshot.get("ocean") is Dictionary and _target_altitude <= 0.02:
+				microscope_requested.emit()
+				accept_event()
+				return
 			stop_stroke()
 			grab_focus()
 			if _altitude > 2:

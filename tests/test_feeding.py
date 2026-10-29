@@ -195,7 +195,7 @@ class FeedingTests(unittest.TestCase):
         self.assertTrue(all(r['meal'] is None for r in restored.observations.values()))
         restored.step()
         self.assertGreater(sum(restored.leaves), 0)
-        self.assertEqual(payload(restored)['format'], 9)
+        self.assertEqual(payload(restored)['format'], 10)
 
     def test_current_save_and_autocopy_recover_exact_future(self):
         sim = Simulation()

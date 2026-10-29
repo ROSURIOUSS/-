@@ -1,6 +1,7 @@
 extends Control
 
 var history: Array = []
+var series_names: Array = ["population", "herbivores", "carnivores"]
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(200, 100)
@@ -14,7 +15,7 @@ func _draw() -> void:
 	var peak: float = 10.0
 	for sample: Dictionary in history:
 		peak = maxf(peak, float(sample["population"]) * 1.15)
-	for series in ["population", "herbivores", "carnivores"]:
+	for series in series_names:
 		var points := PackedVector2Array()
 		for i in range(history.size()):
 			points.append(Vector2(4 + (size.x - 8) * i / maxf(1, history.size() - 1), size.y - 5 - float(history[i][series]) / peak * (size.y - 10)))

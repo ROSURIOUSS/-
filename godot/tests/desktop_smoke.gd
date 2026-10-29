@@ -1,6 +1,7 @@
 extends SceneTree
 ## Run via `godot --headless --path godot --script res://tests/desktop_smoke.gd
 ## -- --fixture=/absolute/path/snapshot.json`. This is NOT the app main scene.
+const Microscope = preload("res://ocean_view.gd")
 const PlanetView = preload("res://world_view.gd")
 const PlanetGeometry = preload("res://planet_geometry.gd")
 const Bridge = preload("res://python_bridge.gd")
@@ -185,6 +186,41 @@ func _run() -> void:
 		view.set_scale_level(0)
 		await create_timer(0.5).timeout
 		await _capture(view, screenshots, "earth-ocean")
+	print("[SMOKE] metric aquatic patch, actual cell diameter, zoom/pick/pan")
+	var aquatic: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(fixture.get_basename() + "-ocean.json"))
+	var microscope := Microscope.new()
+	microscope.size = Vector2(1100, 650)
+	root.add_child(microscope)
+	microscope.update_world(aquatic)
+	await process_frame
+	assert(aquatic["ocean"]["cells"].size() > 1)
+	assert(aquatic["population"] == 0 and aquatic["creatures"].is_empty())
+	var micro_cell: Dictionary = aquatic["ocean"]["cells"][0]
+	var micro_point := Vector2(micro_cell["x"], micro_cell["y"])
+	assert(microscope.patch_point(microscope.screen_point(micro_point)).distance_to(micro_point) < 0.001)
+	assert(microscope.pick_cell(microscope.screen_point(micro_point)) == int(micro_cell["id"]))
+	var base_scale := microscope.pixels_per_um()
+	var micro_wheel := InputEventMouseButton.new()
+	micro_wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	micro_wheel.pressed = true
+	micro_wheel.position = microscope.screen_point(micro_point)
+	microscope._gui_input(micro_wheel)
+	assert(absf(microscope.pixels_per_um() / base_scale - 1.25) < 0.0001)
+	assert(absf(float(micro_cell["diameter_um"]) - 4 * pow(float(micro_cell["energy"]) / 40, 1.0 / 3.0)) < 0.001)
+	microscope.selected_id = int(micro_cell["id"])
+	if not screenshots.is_empty():
+		await process_frame
+		await RenderingServer.frame_post_draw
+		microscope.get_viewport().get_texture().get_image().save_png(screenshots.path_join("ocean-micrometres.png"))
+	microscope.zoom = 10
+	microscope.center = micro_point
+	microscope.queue_redraw()
+	if not screenshots.is_empty():
+		await process_frame
+		await RenderingServer.frame_post_draw
+		microscope.get_viewport().get_texture().get_image().save_png(screenshots.path_join("ocean-selected-cell.png"))
+	microscope.queue_free()
+	await process_frame
 	view.update_world(data)
 	assert(not view._ground_material.get_shader_parameter("earth_mode"))
 	assert(view._geometry.relief == PlanetGeometry.RELIEF)
@@ -408,6 +444,64 @@ func _run() -> void:
 		await process_frame
 	assert(float(resumed.save_panel._records[0]["earth_age_myr"]) == 5)
 	assert(resumed.save_panel._record_time(resumed.save_panel._records[0]).contains("млн лет"))
+	print("[SMOKE] explicit founder consent, microscope UI, biological clock and dirty autosave")
+	assert(resumed.ocean_button.disabled)
+	resumed.send_command("control", {"paused": false, "speed": 10})
+	deadline = Time.get_ticks_msec() + 15000
+	while float(resumed.snapshot["earth"]["age_myr"]) < 600 and Time.get_ticks_msec() < deadline:
+		await process_frame
+	assert(float(resumed.snapshot["earth"]["age_myr"]) == 600 and resumed.snapshot["paused"])
+	assert(not resumed.ocean_button.disabled and resumed.snapshot.get("ocean") == null)
+	resumed.ocean_button.pressed.emit()
+	assert(resumed.ocean_dialog.visible)
+	resumed.ocean_dialog.hide()
+	assert(resumed.snapshot.get("ocean") == null, "Cancelling must not introduce life")
+	resumed.ocean_button.pressed.emit()
+	resumed.ocean_dialog.hide()
+	resumed.ocean_dialog.confirmed.emit()
+	deadline = Time.get_ticks_msec() + 15000
+	while resumed.snapshot.get("ocean") == null and Time.get_ticks_msec() < deadline:
+		await process_frame
+	assert(resumed.snapshot["ocean"] is Dictionary and resumed.snapshot["paused"])
+	assert(resumed.snapshot["ocean"]["cells"].size() == 1)
+	assert(resumed.ocean_view.visible and not resumed.map_view.visible)
+	assert(resumed.scale_select.selected == 2 and resumed.chart.series_names == ["population"])
+	assert(resumed.graph_title.text.contains("часов") and not resumed.graph_legend.text.contains("хищники"))
+	assert(resumed.clock.text.contains("0.25 модельного часа") and resumed.stats.text.contains("1 клеток"))
+	assert(resumed.brush_select.disabled and not resumed.pause_button.disabled)
+	var founder: Dictionary = resumed.snapshot["ocean"]["cells"][0]
+	assert(float(founder["diameter_um"]) == 4)
+	var micro_click := InputEventMouseButton.new()
+	micro_click.button_index = MOUSE_BUTTON_LEFT
+	micro_click.pressed = true
+	micro_click.position = resumed.ocean_view.screen_point(Vector2(founder["x"], founder["y"]))
+	resumed.ocean_view._gui_input(micro_click)
+	assert(resumed.ocean_view.selected_id == 1 and resumed.inspector.text.contains("4.00 мкм"))
+	assert(resumed.inspector.text.contains("ЛИЧНАЯ НЕЙРОСЕТЬ"))
+	resumed.save_panel.request_save()
+	while (resumed.save_panel._saving or resumed.save_panel._records[0].get("ocean_hours") == null) and Time.get_ticks_msec() < deadline:
+		await process_frame
+	assert(float(resumed.save_panel._records[0]["ocean_hours"]) == 0)
+	assert(resumed.save_panel._record_time(resumed.save_panel._records[0]).contains("микросреда"))
+	var micro_saved_version := resumed.save_panel._saved_version
+	resumed.send_command("single_step", {})
+	while float(resumed.snapshot["ocean"]["hours"]) == 0 and Time.get_ticks_msec() < deadline:
+		await process_frame
+	assert(float(resumed.snapshot["ocean"]["hours"]) == 0.25)
+	assert(float(resumed.snapshot["day"]) == 30 and float(resumed.snapshot["earth"]["age_myr"]) == 600)
+	assert(resumed.save_panel._version > micro_saved_version, "Frozen geological day must not hide dirty biological time")
+	assert(resumed.neural_activity.activations == resumed.snapshot["ocean"]["cells"][0]["memory"])
+	assert(resumed.inspector.text.contains("ВЫХОДЫ"))
+	resumed.ocean_feed.value = 0
+	while float(resumed.snapshot["ocean"]["feed_rate"]) != 0 and Time.get_ticks_msec() < deadline:
+		await process_frame
+	assert(float(resumed.snapshot["ocean"]["feed_rate"]) == 0)
+	resumed.set_observation_scale(1)
+	assert(not resumed.ocean_view.visible and resumed.map_view.visible)
+	assert(resumed.map_view._bodies.multimesh.instance_count == 0)
+	resumed.map_view._target_altitude = 0.015
+	resumed.map_view._gui_input(micro_wheel)
+	assert(resumed.ocean_view.visible and resumed.scale_select.selected == 2)
 	resumed.set_controls_enabled(false)
 	await resumed.bridge.shutdown()
 	resumed.queue_free()
@@ -417,7 +511,7 @@ func _run() -> void:
 	DirAccess.remove_absolute(backup_folder)
 	DirAccess.remove_absolute(test_preferences)
 	DirAccess.remove_absolute(session_root)
-	print("PASS: planet, meshes, layers, zoom, bundled core, sandbox IPC/undo/step, body genes, lineage follow, weather, desktop toolbox, autosave timer/rotation/selection/restart consent, forage textures/plants/layers/real meal, individual neural learning, early Earth physical scales/clock/consent/save, shutdown")
+	print("PASS: planet, meshes, layers, zoom, bundled core, sandbox IPC/undo/step, body genes, lineage follow, weather, desktop toolbox, autosave timer/rotation/selection/restart consent, forage textures/plants/layers/real meal, individual neural learning, early Earth physical scales/clock/consent/save, metric aquatic cells/zoom/selection/founder consent/individual learning/biological autosave, shutdown")
 	quit(0)
 
 func _capture(view: PlanetView, folder: String, name: String) -> void:

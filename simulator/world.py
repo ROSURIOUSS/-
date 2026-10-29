@@ -3,18 +3,11 @@ from __future__ import annotations
 
 import math
 import random
-from . import earth as earth_model
-from .intelligence import new_experience, act, learn, outcome_reward, summary as intelligence_summary
+from . import earth as earth_model, ocean as ocean_model
+from .intelligence import new_experience, recurrent_decision, learn, outcome_reward, summary as intelligence_summary
 from .feeding import LABELS, advance_forage, initial_forage, food_signal, take_meal
 from .behavior import public_observation
 from .weather import advance_moisture, initial_moisture, weather_field
-try:
-    from math import sumprod as _dot  # Python 3.12+: fast standard-library dot product.
-except ImportError:
-    from operator import mul
-
-    def _dot(left, right):
-        return sum(map(mul, left, right))
 from dataclasses import asdict, dataclass, field
 
 WIDTH, HEIGHT = 80, 48
@@ -114,20 +107,8 @@ class Creature:
         return self.speed * math.sqrt(self.elongation) / (1 + 0.45 * self.armor)
 
     def think(self, inputs: list[float]) -> list[float]:
-        # All recurrent neurons read the SAME previous state (no in-place updates).
-        previous = self.memory
-        brain = self.brain
-        hidden = []
-        stride = INPUTS + HIDDEN + 1
-        for offset in range(0, HIDDEN * stride, stride):
-            total = _dot(inputs, brain[offset:offset + INPUTS])
-            total += _dot(previous, brain[offset + INPUTS:offset + INPUTS + HIDDEN])
-            hidden.append(math.tanh(total + brain[offset + INPUTS + HIDDEN]))
-        self.memory = hidden
-        output = []
-        for offset in range(HIDDEN * stride, WEIGHTS, HIDDEN + 1):
-            output.append(_dot(hidden, brain[offset:offset + HIDDEN]) + brain[offset + HIDDEN])
-        return act(self.experience, inputs, hidden, output)
+        self.memory, output = recurrent_decision(self.brain, self.memory, self.experience, inputs)
+        return output
 
 
 class SpatialIndex:
@@ -210,6 +191,7 @@ class World:
     def __init__(self, config: Config):
         self.config = config
         self.earth = None
+        self.ocean = None
         self._earth_surface = None
         self.rng = random.Random(config.seed)
         self.day = 0.0
@@ -329,6 +311,9 @@ class World:
         return creature
 
     def step(self, dt: float = 0.25):
+        if self.ocean is not None:
+            ocean_model.advance(self, dt)
+            return
         if self.earth is not None:
             earth_model.advance(self, dt)
             return
@@ -552,7 +537,12 @@ class World:
                       "behavior": public_observation(self.observations.get(c.id))}
                      for c in self.creatures]
         lineages = self.lineages()
-        return {"earth": dict(self._earth_surface) if self.earth is not None else None,
+        earth = dict(self._earth_surface) if self.earth is not None else None
+        if earth is not None and self.ocean is not None:
+            earth['complete'] = False
+            earth['phase'] = "Локальная водная микросреда · начальная клетка задана явно"
+        return {"earth": earth,
+                "ocean": ocean_model.snapshot(self.ocean),
                 "surface_sea_level": self.surface_sea_level,
                 "leaves": [round(v, 3) for v in self.leaves],
                 "seeds": [round(v, 3) for v in self.seeds],
