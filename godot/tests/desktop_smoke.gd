@@ -220,6 +220,12 @@ func _run() -> void:
 		print("[SMOKE] startup diagnostics: ", JSON.stringify({"phase": app.save_panel._phase, "ready": app.bridge.is_ready, "broken": app.bridge._broken, "pending": app.bridge._pending_command, "queue": app.bridge._queue, "waiting": app.bridge._waiting, "snapshot_day": app.snapshot.get("day"), "paused": app.snapshot.get("paused"), "error": app.error_label.text, "core_stderr": app.bridge._diagnostics, "records": app.save_panel._records, "panel_status": app.save_panel._status.text}))
 	assert(app.save_panel.session_ready and not app.snapshot.is_empty(), "Desktop UI startup/recovery check did not finish")
 	app.save_panel.enabled = false
+	var unobserved_day := float(app.snapshot["day"])
+	app.send_command("single_step", {})
+	deadline = Time.get_ticks_msec() + 15000
+	while float(app.snapshot["day"]) <= unobserved_day and Time.get_ticks_msec() < deadline:
+		await process_frame
+	assert(float(app.snapshot["day"]) > unobserved_day)
 	assert(app.brush_select.selected == 0 and app.undo_button.disabled)
 	assert(app.lineage_panel._list.item_count == app.snapshot["lineages"].size())
 	var family: Dictionary = app.snapshot["lineages"][0]
@@ -227,11 +233,14 @@ func _run() -> void:
 	assert(app.map_view.track_lineage and app.map_view.tracked_lineage == int(family["id"]))
 	assert(app.lineage_panel._tracking.button_pressed)
 	assert(app.inspector.text.contains("Панцирь") and app.inspector.text.contains("Влага"))
+	var inspected_network := false
 	for observed: Dictionary in app.snapshot["creatures"]:
 		if observed.get("behavior") is Dictionary:
 			app.map_view.select_creature(int(observed["id"]))
 			assert(app.inspector.text.contains("ВХОДЫ СЕТИ") and app.inspector.text.contains("ВЫХОДЫ СЕТИ"))
+			inspected_network = true
 			break
+	assert(inspected_network, "Inspect a real neural decision, not just the empty-state label")
 	assert(app.behavior_text({"behavior": null}).contains("ещё нет шага"))
 	assert(app.brush_select.item_count == 13)
 	app.brush_select.select(5)
