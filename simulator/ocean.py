@@ -203,7 +203,12 @@ def unpack(raw, world):
         ids.add(c.id)
         number(c.x, 0, WIDTH_UM)
         number(c.y, 0, HEIGHT_UM)
-        number(c.energy, 1.000000000001, 180)
+        number(c.energy, 1, 180)
+        if c.energy <= 1:
+            raise ValueError('Неживая клетка в водной популяции')
+        radius = c.diameter_um / 2
+        if not radius <= c.x <= WIDTH_UM - radius or not radius <= c.y <= HEIGHT_UM - radius:
+            raise ValueError('Тело водной клетки выходит за границы участка')
         number(c.age, 0, min(96, state['hours']))
         if c.age >= 96:
             raise ValueError('Клетка превысила предельный возраст')

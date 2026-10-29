@@ -467,7 +467,7 @@ func _run() -> void:
 	assert(resumed.ocean_view.visible and not resumed.map_view.visible)
 	assert(resumed.scale_select.selected == 2 and resumed.chart.series_names == ["population"])
 	assert(resumed.graph_title.text.contains("часов") and not resumed.graph_legend.text.contains("хищники"))
-	assert(resumed.clock.text.contains("0.25 модельного часа") and resumed.stats.text.contains("1 клеток"))
+	assert(resumed.clock.text.contains("0.25 ч/шаг") and resumed.stats.text.contains("1 клеток"))
 	assert(resumed.brush_select.disabled and not resumed.pause_button.disabled)
 	var founder: Dictionary = resumed.snapshot["ocean"]["cells"][0]
 	assert(float(founder["diameter_um"]) == 4)

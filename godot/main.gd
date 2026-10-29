@@ -521,7 +521,7 @@ func receive_state(data: Dictionary) -> void:
 		stats.text = "ВОДНАЯ МИКРОСРЕДА · %d клеток / %d максимум\nПоявилось делением %d · Погибло %d · Температура %.1f °C" % [ocean["cells"].size(), ocean["limit"], ocean["births"], ocean["deaths"], data["temperature"]]
 		ecosystem_label.text = "ЛОКАЛЬНЫЙ УЧАСТОК 400 × 240 мкм · Первая клетка введена явно, не химическим абиогенезом"
 		weather_label.text = "Движение / питание / деление / личное обучение · Размер исходной клетки 4 мкм · Не весь океан"
-		clock.text = "Микросреда: %.2f ч · 0.25 модельного часа/шаг · Земля: %.0f млн лет (заморожено)" % [ocean["hours"], earth["age_myr"]]
+		clock.text = "Микросреда: %.2f ч · 0.25 ч/шаг\nЗемля: %.0f млн лет · часы заморожены" % [ocean["hours"], earth["age_myr"]]
 		ocean_feed.set_value_no_signal(float(ocean["feed_rate"]))
 		if ocean["cells"].is_empty():
 			show_error("Клетки вымерли. Автоматического заселения нет; можно восстановить сохранение или начать новый сценарий Земли.")

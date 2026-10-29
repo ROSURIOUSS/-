@@ -291,7 +291,7 @@ class OceanTests(unittest.TestCase):
 
     def test_corrupt_cell_and_neural_state_are_rejected(self):
         good = payload(microcosm())
-        for key, value in [('id', True), ('x', -1), ('y', 241), ('energy', 0), ('age', 1),
+        for key, value in [('id', True), ('x', -1), ('x', 0), ('y', 241), ('energy', 0), ('energy', 1), ('age', 1),
                            ('generation', 2), ('parent', 1), ('threshold', 1), ('metabolism', 3),
                            ('brain', [0]), ('memory', [0]), ('inputs', None), ('outputs', [True] * 4),
                            ('absorbed', float('nan')), ('action', 'Fake action'), ('experience', {})]:
