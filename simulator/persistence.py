@@ -301,6 +301,10 @@ def unpack(data: dict) -> tuple[World, bool, int]:
         if world.earth is not None:
             if config.population != 0 or world.creatures or world.births or world.deaths or world.introduced or world.next_id != 1 or world.observations:
                 raise ValueError("В добиологическом сценарии не должно быть организмов или событий их жизни")
+            if any(sample["population"] != 0 for sample in world.history):
+                raise ValueError("В ранней Земле не должно быть истории готовой популяции")
+            if any(value != (0.0 if world.land(i) else 1.0) for i, value in enumerate(world.moisture)):
+                raise ValueError("Вода не соответствует геологической поверхности")
             if abs(world.day * earth_model.MYR_PER_MODEL_DAY - world.earth["age_myr"]) > 1e-8:
                 raise ValueError("Несогласованные геологические часы")
             if any(any(getattr(world, key)) for key in ("food", "leaves", "seeds", "meat", "soil", "canopy", "temperature_bias", "rain_bias")):

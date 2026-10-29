@@ -170,6 +170,14 @@ class EarlyEarthTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 persistence.unpack(bad)
         bad = copy.deepcopy(good)
+        bad['moisture'][0] = 0.5
+        with self.assertRaises(ValueError):
+            persistence.unpack(bad)
+        bad = copy.deepcopy(good)
+        bad['history'][0].update(population=2, herbivores=2)
+        with self.assertRaises(ValueError):
+            persistence.unpack(bad)
+        bad = copy.deepcopy(good)
         bad['earth'] = None
         with self.assertRaises(ValueError):
             persistence.unpack(bad)  # Normal worlds still cannot have initial population zero.

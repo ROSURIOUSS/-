@@ -74,6 +74,8 @@ class Simulation:
                 self.world, self.paused, self.speed, self.error = world, True, speed, None
                 self.autosaves = info
                 self.sandbox.clear()
+                if world.earth is not None:
+                    return "Ранняя Земля восстановлена: %.0f млн лет после формирования. Мир на паузе" % world.earth["age_myr"]
                 return f"Автокопия восстановлена: день {world.day:.2f}. Мир на паузе"
         elif name == "brush":
             if self.world.earth is not None:

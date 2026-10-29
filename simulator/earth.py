@@ -64,7 +64,8 @@ def surface(state, elevation, width, height):
 
 
 def refresh(world, *, reset_water=False):
-    world._earth_surface = surface(world.earth, world.elevation, len(world.elevation) // 48, 48)
+    from .world import WIDTH, HEIGHT
+    world._earth_surface = surface(world.earth, world.elevation, WIDTH, HEIGHT)
     world.land_tiles = [i for i in range(len(world.elevation)) if world.land(i)]
     rain = world._earth_surface["ocean_percent"] / 100 * 0.5
     world.precipitation = [rain] * len(world.elevation)
