@@ -150,7 +150,7 @@ class BundledCoreTests(unittest.TestCase):
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
             packets = [json.loads(line) for line in result.stdout.splitlines()]
-            self.assertEqual(packets[0]["protocol"], 7)
+            self.assertEqual(packets[0]["protocol"], 8)
             self.assertTrue(packets[1]["ok"])
             self.assertIn("canopy", packets[1]["state"])
             self.assertIn("ecosystem", packets[1]["state"])

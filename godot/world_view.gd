@@ -388,12 +388,20 @@ func _update_organisms() -> void:
 		var identity := int(creature["id"])
 		var uv := Vector2(creature["x"], creature["y"]) / Vector2(_geometry.width, _geometry.height)
 		var target := _geometry.point(uv, 0.016 * float(creature["size"]) * ORGANISM_VISUAL_SCALE)
-		var visual: Dictionary = _visuals.get(identity, {"position": target, "heading": float(identity)})
-		var old_target: Vector3 = visual.get("target", target)
-		if old_target.distance_to(target) > 0.00001:
-			var basis := _tangent_basis(uv)
-			var local := basis.inverse() * (target - old_target)
-			visual["heading"] = atan2(local.x, local.z)
+		var fresh := not _visuals.has(identity)
+		var visual: Dictionary = _visuals.get(identity, {"position": target, "heading": 0.0, "target_heading": 0.0, "phase": fposmod(float(identity), TAU), "motion": 0.0})
+		var behavior = creature.get("behavior")
+		var motion := 0.0
+		if behavior is Dictionary:
+			var velocity := Vector2(float(behavior["velocity"][0]), float(behavior["velocity"][1]))
+			motion = clampf(velocity.length() / maxf(0.001, 2.4 * float(creature["mobility"]) * sqrt(2.0)), 0.0, 1.0)
+			if velocity.length_squared() > 0.000001:
+				var direction := Geometry.direction(uv + velocity / Vector2(_geometry.width, _geometry.height) * 0.001) - Geometry.direction(uv)
+				var local := _tangent_basis(uv).inverse() * direction
+				visual["target_heading"] = atan2(local.x, local.z)
+				if fresh:
+					visual["heading"] = visual["target_heading"]
+		visual["target_motion"] = motion
 		visual["target"] = target
 		visual["data"] = creature
 		alive[identity] = visual
@@ -511,6 +519,14 @@ func _process(delta: float) -> void:
 		current = current.lerp(target, smoothing).normalized() * radius
 		visual["position"] = current
 		var uv := Geometry.coordinates(current)
+		visual["heading"] = lerp_angle(float(visual["heading"]), float(visual["target_heading"]), smoothing)
+		if not snapshot.get("paused", true):
+			visual["motion"] = lerpf(float(visual["motion"]), float(visual["target_motion"]), smoothing)
+			visual["phase"] = fposmod(float(visual["phase"]) + delta * (2.0 + float(visual["motion"]) * 8.0) * minf(float(snapshot.get("speed", 1)), 5.0), TAU)
+		elif float(visual["motion"]) == 0.0:
+			visual["motion"] = visual["target_motion"]
+		var motion := float(visual["motion"])
+		var phase := float(visual["phase"]) / TAU
 		var basis := _tangent_basis(uv) * Basis(Vector3.UP, float(visual["heading"]))
 		var scale := float(c["size"]) * ORGANISM_VISUAL_SCALE
 		var color := Color.from_hsv(float(c["hue"]), 0.49, 0.88)
@@ -524,7 +540,7 @@ func _process(delta: float) -> void:
 		var body_scale := Vector3(0.012 * girth, 0.009 * girth * (1.0 + armor * 0.3), 0.020 * shape) * scale
 		_bodies.multimesh.set_instance_transform(index, Transform3D(basis * Basis.from_scale(body_scale), current))
 		_bodies.multimesh.set_instance_color(index, color)
-		_bodies.multimesh.set_instance_custom_data(index, Color(float(identity % 1000) / 1000.0, float(c["health"]) / 100, armor, 0))
+		_bodies.multimesh.set_instance_custom_data(index, Color(phase, float(c["health"]) / 100, armor, motion))
 		var nucleus_scale := Vector3.ONE * 0.0045 * scale
 		_nuclei.multimesh.set_instance_transform(index, Transform3D(basis * Basis.from_scale(nucleus_scale), current + basis.y * 0.010 * scale * girth * (1.0 + armor * 0.3)))
 		_nuclei.multimesh.set_instance_color(index, Color("ffd8a2") if c["diet"] == "carnivore" else Color("a9efda"))
@@ -533,7 +549,7 @@ func _process(delta: float) -> void:
 			var tail_basis := basis * Basis(Vector3.RIGHT, PI * 0.5)
 			_tails.multimesh.set_instance_transform(index * 3 + segment, Transform3D(tail_basis * Basis.from_scale(Vector3(0.0012, 0.018, 0.0012) * scale), current + basis * offset))
 			_tails.multimesh.set_instance_color(index * 3 + segment, color.lightened(0.1))
-			_tails.multimesh.set_instance_custom_data(index * 3 + segment, Color(float(identity % 1000) / 1000.0, float(c["health"]) / 100, 0, 0))
+			_tails.multimesh.set_instance_custom_data(index * 3 + segment, Color(phase, float(c["health"]) / 100, 0, motion))
 		if identity == selected_id:
 			_selection.visible = true
 			_selection.transform = Transform3D(basis * Basis.from_scale(Vector3(girth, 1.0, shape) * scale), current - basis.y * 0.007 * scale)

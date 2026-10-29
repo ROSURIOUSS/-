@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import random
+from .behavior import public_observation
 from .weather import advance_moisture, initial_moisture, weather_field
 try:
     from math import sumprod as _dot  # Python 3.12+: fast standard-library dot product.
@@ -205,6 +206,7 @@ class World:
         self.config = config
         self.rng = random.Random(config.seed)
         self.day = 0.0
+        self.observations: dict[int, dict] = {}
         self.births = 0
         self.deaths = 0
         self.introduced = 0
@@ -298,6 +300,7 @@ class World:
 
     def step(self, dt: float = 0.25):
         self.day += dt
+        self.observations = {}
         thermal_decay = math.exp(-dt / 120)
         self.temperature_bias = [bias * thermal_decay for bias in self.temperature_bias]
         rain_decay = math.exp(-dt / 3.0)
@@ -356,14 +359,26 @@ class World:
                       (temp - c.ideal_temp) / 30, self.rng.uniform(-1, 1),
                       *sense(c, prey), *sense(c, threat)]
             dx, dy, eat, reproduce = c.think(inputs)
+            old_x, old_y = c.x, c.y
             old_key = index.key(c.x, c.y)
             nx = (c.x + dx * dt * 2.4 * c.mobility) % WIDTH
             ny = max(0.01, min(HEIGHT - 0.01, c.y + dy * dt * 2.4 * c.mobility))
-            if self.land(self.tile(nx, ny)):
+            blocked = not self.land(self.tile(nx, ny))
+            if not blocked:
                 c.x, c.y = nx, ny
                 index.move(c, old_key)
             tile = self.tile(c.x, c.y)
-            c.action = "Спасается" if threat is not None else ("Охотится" if prey is not None else "Ищет пищу")
+            velocity = [wrapped_dx(c.x, old_x) / dt, (c.y - old_y) / dt] if dt > 0 else [0.0, 0.0]
+            self.observations[c.id] = {
+                "id": c.id, "day": self.day, "dt": dt, "inputs": inputs,
+                "outputs": [dx, dy, eat, reproduce], "velocity": velocity,
+                "prey": prey.id if prey else None, "threat": threat.id if threat else None,
+                "blocked": blocked,
+            }
+            # Labels report measured movement, not assumed intent from mere proximity.
+            escaping = threat is not None and sum(a * b for a, b in zip(velocity, inputs[14:16])) < -1e-6
+            chasing = prey is not None and sum(a * b for a, b in zip(velocity, inputs[12:14])) > 1e-6
+            c.action = "Спасается" if escaping else ("Охотится" if chasing else "Ищет пищу")
             if eat > -0.4:
                 bite = min(resource[tile], dt * 0.38 * c.size)
                 resource[tile] -= bite
@@ -409,6 +424,7 @@ class World:
                     highest_generation = child.generation
                     self.events.append(f"День {int(self.day)}: появилось поколение {child.generation}.")
         self.creatures = [c for c in self.creatures if c.id not in dead] + babies
+        self.observations = {c.id: self.observations[c.id] for c in self.creatures if c.id in self.observations}
         counts = self.counts()
         for diet, name in (("herbivores", "Травоядные"), ("carnivores", "Хищники")):
             if old_counts[diet] and not counts[diet]:
@@ -481,7 +497,8 @@ class World:
                       "elongation": round(c.elongation, 3), "armor": round(c.armor, 3),
                       "mobility": round(c.mobility, 3), "lineage": c.lineage,
                       "lineage_complete": c.lineage_complete,
-                      "memory": [round(v, 3) for v in c.memory]}
+                      "memory": [round(v, 3) for v in c.memory],
+                      "behavior": public_observation(self.observations.get(c.id))}
                      for c in self.creatures]
         lineages = self.lineages()
         return {"moisture": [round(v, 3) for v in self.moisture],

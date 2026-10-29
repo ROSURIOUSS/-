@@ -10,6 +10,7 @@ import tempfile
 from dataclasses import asdict, fields
 from pathlib import Path
 
+from .behavior import validate_observations
 from .weather import initial_moisture
 from .world import Config, Creature, DIETS, HEIGHT, HIDDEN, MAX_POPULATION, WEIGHTS, WIDTH, World, environment_fields
 
@@ -44,6 +45,7 @@ def pack(world: World, paused: bool, speed: int) -> dict:
             "elevation": world.elevation, "food": world.food, "meat": world.meat,
             "soil": world.soil, "canopy": world.canopy,
             "creatures": [asdict(c) for c in world.creatures],
+            "observations": [world.observations[c.id] for c in world.creatures if c.id in world.observations],
             "rng": world.rng.getstate(), "history": world.history, "events": world.events,
             "paused": paused, "speed": speed}
 
@@ -274,6 +276,7 @@ def unpack(data: dict) -> tuple[World, bool, int]:
         world.rng.setstate(state)
         if type(data["paused"]) is not bool or type(data["speed"]) is not int or data["speed"] not in (1, 2, 5, 10):
             raise ValueError("Неверное состояние времени")
+        world.observations = validate_observations(data.get("observations", []), world.creatures, world.day)
         return world, data["paused"], data["speed"]
     except (KeyError, TypeError, OverflowError, AttributeError) as exc:
         raise ValueError("Повреждённое или неполное сохранение") from exc

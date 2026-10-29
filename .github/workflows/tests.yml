@@ -51,8 +51,14 @@ jobs:
         run: |
           set -o pipefail
           python tools/render_fixture.py
-          timeout 120s xvfb-run -a .cache/godot/Godot_v4.4.1-stable_linux.x86_64 --path godot --rendering-method gl_compatibility --rendering-driver opengl3 --script res://tests/desktop_smoke.gd -- --fixture="$PWD/.cache/snapshot.json" --screenshots="$PWD/.cache/screenshots" 2>&1 | tee .cache/native-smoke.log
-          if grep -E 'SCRIPT ERROR|SHADER ERROR|Parse Error|^ERROR:' .cache/native-smoke.log; then exit 1; fi
+          status=0
+          timeout 120s xvfb-run -a .cache/godot/Godot_v4.4.1-stable_linux.x86_64 --path godot --rendering-method gl_compatibility --rendering-driver opengl3 --script res://tests/desktop_smoke.gd -- --fixture="$PWD/.cache/snapshot.json" --screenshots="$PWD/.cache/screenshots" 2>&1 | tee .cache/native-smoke.log || status=$?
+          if grep -E 'SCRIPT ERROR|SHADER ERROR|Parse Error|^ERROR:' .cache/native-smoke.log; then status=1; fi
+          if [ "$status" -ne 0 ]; then
+            # Keep diagnostics accessible through the checks API as well as artifacts.
+            python -c 'from pathlib import Path; text = Path(".cache/native-smoke.log").read_text(errors="replace"); text = "\n".join(text.splitlines()[-80:]); print("::error title=Native Godot diagnostics::" + text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))'
+            exit "$status"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:

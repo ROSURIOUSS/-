@@ -296,7 +296,7 @@ class AutosaveTests(unittest.TestCase):
                                     text=True, capture_output=True, timeout=20, check=True)
             self.assertEqual(result.stderr, "")
             packets = [json.loads(line) for line in result.stdout.splitlines()]
-            self.assertEqual(packets[0]["protocol"], 7)
+            self.assertEqual(packets[0]["protocol"], 8)
             self.assertTrue(all(row["ok"] for row in packets[1:]))
             return packets
         first = worker(requests)

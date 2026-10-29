@@ -332,7 +332,14 @@ func build_ui() -> void:
 	(inspect_box.get_parent() as Control).size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	inspect_box.add_child(label_for("Под микроскопом", 14, ACCENT))
 	inspector = label_for("Нажмите на существо на карте,\nчтобы узнать его историю.", 13)
-	inspect_box.add_child(inspector)
+	var organism_scroll := ScrollContainer.new()
+	organism_scroll.custom_minimum_size.y = 200
+	organism_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	organism_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	inspect_box.add_child(organism_scroll)
+	inspector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inspector.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	organism_scroll.add_child(inspector)
 	inspect_box.add_child(label_for("Память сети: 8 реальных состояний (−1…1)", 11, MUTED))
 	neural_activity = NeuralActivity.new()
 	inspect_box.add_child(neural_activity)
@@ -460,11 +467,27 @@ func update_inspector() -> void:
 			var parent := "—" if creature["parent"] == null else "#%d" % int(creature["parent"])
 			var ancestry := "" if creature["lineage_complete"] else " (частичная)"
 			inspector.text = "%s #%d · Поколение %d\nЛиния #%d%s · Панцирь %.0f%%\nВытянутость %.2f · Подвижность %.2f\nЗдоровье %.0f%% · Энергия %.0f / 185\nВозраст %.1f дн. · Потомков %d · Охот %d\nСкорость %.2f · Размер %.2f · Обзор %.1f\nРодитель %s · Комфорт %.1f °C\nЗдесь %.1f °C · %s\nВлага %.0f%% · Осадки %.0f%%" % [diet, creature["id"], creature["generation"], creature["lineage"], ancestry, float(creature["armor"]) * 100, creature["elongation"], creature["mobility"], creature["health"], creature["energy"], creature["age"], creature["children"], creature["kills"], creature["speed"], creature["size"], creature["vision"], parent, creature["ideal_temp"], creature["local_temperature"], creature["action"], float(creature["local_moisture"]) * 100, float(creature["local_rain"]) * 100]
+			inspector.text += behavior_text(creature)
 			neural_activity.activations = creature["memory"]
 			neural_activity.queue_redraw()
 			return
 	inspector.text = "Этот организм завершил свой путь.\nВыберите другое существо."
 	neural_activity.queue_redraw()
+
+func behavior_text(creature: Dictionary) -> String:
+	var behavior = creature.get("behavior")
+	if not behavior is Dictionary:
+		return "\n\nПоведение: ещё нет шага наблюдения."
+	var inputs: Array = behavior["inputs"]
+	var outputs: Array = behavior["outputs"]
+	var velocity := Vector2(float(behavior["velocity"][0]), float(behavior["velocity"][1]))
+	var prey := "—" if behavior["prey"] == null else "#%d" % int(behavior["prey"])
+	var threat := "—" if behavior["threat"] == null else "#%d" % int(behavior["threat"])
+	var text := "\n\nПОСЛЕДНИЙ ШАГ · день %.2f\nДобыча %s · Угроза %s\nДвижение: X %+.2f / Y %+.2f клет./день\nБерег заблокировал ход: %s" % [float(behavior["day"]), prey, threat, velocity.x, velocity.y, "да" if behavior["blocked"] else "нет"]
+	text += "\nВХОДЫ СЕТИ (не текущие показания):\nЭнергия %+.2f · Пища здесь %.2f\nПища З/В/С/Ю: %.2f / %.2f / %.2f / %.2f\nСуша З/В/С/Ю: %+.0f / %+.0f / %+.0f / %+.0f\nТемп. отклонение %+.2f · Шум %+.2f\nДобыча X/Y: %+.2f / %+.2f\nУгроза X/Y: %+.2f / %+.2f" % inputs
+	text += "\nВЫХОДЫ СЕТИ (−1…1):\nХод X %+.2f · Ход Y %+.2f\nЕсть %+.2f · Потомство %+.2f" % outputs
+	text += "\nСигнал не гарантирует действие: еда > −0.4,\nпотомство > −0.5 + возраст/энергия/лимит.\nЦели отмечены на момент решения; это не мысли."
+	return text
 
 func focus_lineage(identity: int) -> void:
 	brush_select.select(0)

@@ -370,7 +370,7 @@ class SandboxTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT / "simulator/worker.py")], input=text,
                                 text=True, capture_output=True, cwd=ROOT, timeout=15, check=True)
         packets = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(packets[0], {"type": "ready", "protocol": 7})
+        self.assertEqual(packets[0], {"type": "ready", "protocol": 8})
         self.assertTrue(all(packet["ok"] for packet in packets[1:]))
         before, painted, stepped, undone = [packet["state"] for packet in packets[1:5]]
         self.assertNotEqual(before["temperature_bias"], painted["temperature_bias"])
