@@ -173,7 +173,7 @@ class SandboxTests(unittest.TestCase):
         self.assertEqual(len(self.world.creatures), 0)
         self.assertEqual(self.world.deaths, 2)
         self.assertEqual(self.world.death_causes["intervention"], 2)
-        for field in ("food", "meat", "soil", "canopy"):
+        for field in ("food", "meat", "soil", "canopy", "leaves", "seeds"):
             self.assertEqual(getattr(self.world, field)[self.tile], 0)
         self.assert_valid()
 
@@ -182,7 +182,7 @@ class SandboxTests(unittest.TestCase):
         self.world.land_tiles.remove(self.tile)
         for c in self.world.creatures:
             c.x += 2
-        for field in ("food", "meat", "soil", "canopy"):
+        for field in ("food", "meat", "soil", "canopy", "leaves", "seeds"):
             getattr(self.world, field)[self.tile] = 0
         self.brush("uplift", radius=0.75)
         self.assertIn(self.tile, self.world.land_tiles)
@@ -196,7 +196,7 @@ class SandboxTests(unittest.TestCase):
         self.world.moisture = [1.0] * (WIDTH * HEIGHT)
         self.world.elevation[self.tile] = self.world.config.sea_level + 0.01
         self.world.land_tiles = [self.tile]
-        for field in ("food", "meat", "soil", "canopy"):
+        for field in ("food", "meat", "soil", "canopy", "leaves", "seeds"):
             setattr(self.world, field, [0.0] * (WIDTH * HEIGHT))
         before = packed(self.world)
         with self.assertRaises(ValueError):
@@ -209,7 +209,7 @@ class SandboxTests(unittest.TestCase):
         self.world.elevation[0] = 0
         self.world.moisture[0] = 1
         self.world.land_tiles.remove(0)
-        for field in ("food", "meat", "soil", "canopy"):
+        for field in ("food", "meat", "soil", "canopy", "leaves", "seeds"):
             getattr(self.world, field)[0] = 0
         for kind in ("plant", "spawn_herbivore", "fertilize", "dry"):
             with self.subTest(kind=kind), self.assertRaises(ValueError):
@@ -331,8 +331,10 @@ class SandboxTests(unittest.TestCase):
     def test_v3_migration_preserves_old_arrays_and_has_no_invented_interventions(self):
         old = packed(self.world)
         old["format"] = 3
+        for field in ("leaves", "seeds", "observations"):
+            old.pop(field, None)
         for record in old["creatures"]:
-            for key in ("elongation", "armor", "lineage", "lineage_complete"):
+            for key in ("elongation", "armor", "lineage", "lineage_complete", "foraging"):
                 del record[key]
         for field in ("introduced", "temperature_bias", "moisture", "rain_bias"):
             del old[field]
@@ -370,7 +372,7 @@ class SandboxTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT / "simulator/worker.py")], input=text,
                                 text=True, capture_output=True, cwd=ROOT, timeout=15, check=True)
         packets = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(packets[0], {"type": "ready", "protocol": 8})
+        self.assertEqual(packets[0], {"type": "ready", "protocol": 9})
         self.assertTrue(all(packet["ok"] for packet in packets[1:]))
         before, painted, stepped, undone = [packet["state"] for packet in packets[1:5]]
         self.assertNotEqual(before["temperature_bias"], painted["temperature_bias"])

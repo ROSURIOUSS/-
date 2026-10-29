@@ -93,7 +93,7 @@ class SuccessionTests(unittest.TestCase):
         for _ in range(24):
             a.step()
         payload = json.loads(json.dumps(pack(a, False, 1)))
-        self.assertEqual(payload["format"], 6)
+        self.assertEqual(payload["format"], 7)
         b, _, _ = unpack(payload)
         for _ in range(24):
             a.step()
@@ -107,8 +107,10 @@ class SuccessionTests(unittest.TestCase):
         world.step()
         payload = json.loads(json.dumps(pack(world, False, 1)))
         payload["format"] = 2
+        for field in ("leaves", "seeds", "observations"):
+            payload.pop(field, None)
         for record in payload["creatures"]:
-            for key in ("elongation", "armor", "lineage", "lineage_complete"):
+            for key in ("elongation", "armor", "lineage", "lineage_complete", "foraging"):
                 del record[key]
         for key in ("soil", "canopy", "introduced", "temperature_bias", "moisture", "rain_bias"):
             del payload[key]
@@ -150,7 +152,7 @@ class BundledCoreTests(unittest.TestCase):
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
             packets = [json.loads(line) for line in result.stdout.splitlines()]
-            self.assertEqual(packets[0]["protocol"], 8)
+            self.assertEqual(packets[0]["protocol"], 9)
             self.assertTrue(packets[1]["ok"])
             self.assertIn("canopy", packets[1]["state"])
             self.assertIn("ecosystem", packets[1]["state"])

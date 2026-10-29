@@ -216,7 +216,7 @@ func _receive(line: String) -> void:
 		_fail("Повреждённый ответ Python-ядра.")
 		return
 	if packet.get("type") == "ready":
-		if packet.get("protocol") != 8:
+		if packet.get("protocol") != 9:
 			_fail("Несовместимая версия Python-ядра. Обновите папку core или пересоберите программу из текущих исходников.")
 			return
 		is_ready = true

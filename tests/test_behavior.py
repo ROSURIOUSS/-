@@ -107,6 +107,7 @@ class BehaviorTests(unittest.TestCase):
         c.x = 10.99
         destination = world.tile(c.x + math.tanh(10) * 0.25 * 2.4 * c.mobility, c.y)
         world.elevation[destination] = 0.0
+        world.leaves[destination] = world.seeds[destination] = 0.0
         world.food[destination] = world.meat[destination] = world.soil[destination] = world.canopy[destination] = 0.0
         world.moisture[destination] = 1.0
         world.land_tiles.remove(destination)

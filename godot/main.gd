@@ -288,7 +288,7 @@ func build_ui() -> void:
 	speed_select.item_selected.connect(func(index: int): send_command("control", {"speed": speed_select.get_item_id(index)}))
 	toolbar.add_child(speed_select)
 	var layer_select := OptionButton.new()
-	for title in ["Биосфера", "Запасы пищи", "Температура", "Останки", "Почвы", "Влажность", "Осадки"]:
+	for title in ["Биосфера", "Трава", "Температура", "Останки", "Почвы", "Влажность", "Осадки", "Листва", "Семена"]:
 		layer_select.add_item(title)
 	layer_select.item_selected.connect(func(index: int): map_view.layer = index; map_view.queue_redraw())
 	toolbar.add_child(layer_select)
@@ -430,8 +430,9 @@ func receive_state(data: Dictionary) -> void:
 		show_error(str(data["error"]))
 	elif int(data["population"]) == 0:
 		show_error("Популяция вымерла. Заселите планету кистью или создайте новый мир.")
-	stats.text = "Живых %d   ·   Травоядных %d   ·   Хищников %d   ·   Поколение %d\nТемпература %.1f °C   ·   Растительность %d%%   ·   Успешных охот %d" % [data["population"], data["herbivores"], data["carnivores"], data["generation"], data["temperature"], data["food_percent"], data["death_causes"]["predation"]]
+	stats.text = "Живых %d   ·   Травоядных %d   ·   Хищников %d   ·   Поколение %d\nТемпература %.1f °C   ·   Трава %d%%   ·   Успешных охот %d" % [data["population"], data["herbivores"], data["carnivores"], data["generation"], data["temperature"], data["food_percent"], data["death_causes"]["predation"]]
 	ecosystem_label.text = "ЛЕСА %d%%   /   ПЛОДОРОДИЕ %d%%   /   ЗАСЕЛЕНО %d УЧАСТКОВ   /   БИОМАССА %.1f" % [data["ecosystem"]["forest_percent"], data["ecosystem"]["fertility_percent"], data["ecosystem"]["occupied_tiles"], data["ecosystem"]["biomass"]]
+	ecosystem_label.text += "\nКОРМА / ТРАВА %d%% · ЛИСТВА %d%% · СЕМЕНА %d%%" % [data["nutrition"]["grass_percent"], data["nutrition"]["leaves_percent"], data["nutrition"]["seeds_percent"]]
 	weather_label.text = "ОСАДКИ %d%%   /   ВЛАГА ПОЧВЫ %d%%   /   ЗАСУХА НА %d%% СУШИ" % [data["weather"]["rain_percent"], data["weather"]["moisture_percent"], data["weather"]["drought_percent"]]
 	clock.text = "День %d · %s" % [int(data["day"]), season_name(float(data["day"]))]
 	pause_button.text = "Продолжить" if data["paused"] else "Пауза"
@@ -467,6 +468,11 @@ func update_inspector() -> void:
 			var parent := "—" if creature["parent"] == null else "#%d" % int(creature["parent"])
 			var ancestry := "" if creature["lineage_complete"] else " (частичная)"
 			inspector.text = "%s #%d · Поколение %d\nЛиния #%d%s · Панцирь %.0f%%\nВытянутость %.2f · Подвижность %.2f\nЗдоровье %.0f%% · Энергия %.0f / 185\nВозраст %.1f дн. · Потомков %d · Охот %d\nСкорость %.2f · Размер %.2f · Обзор %.1f\nРодитель %s · Комфорт %.1f °C\nЗдесь %.1f °C · %s\nВлага %.0f%% · Осадки %.0f%%" % [diet, creature["id"], creature["generation"], creature["lineage"], ancestry, float(creature["armor"]) * 100, creature["elongation"], creature["mobility"], creature["health"], creature["energy"], creature["age"], creature["children"], creature["kills"], creature["speed"], creature["size"], creature["vision"], parent, creature["ideal_temp"], creature["local_temperature"], creature["action"], float(creature["local_moisture"]) * 100, float(creature["local_rain"]) * 100]
+			var forage := float(creature["foraging"])
+			var specialization := "Травник" if forage < 0.33 else ("Листоед" if forage > 0.67 else "Смешанное питание")
+			inspector.text += "\nПищеварение: %s · ген %.2f" % [specialization if creature["diet"] == "herbivore" else "Хищник / падальщик", forage]
+			var local_food: Dictionary = creature["local_food"]
+			inspector.text += "\nЗдесь: трава %.0f%% · листва %.0f%%\nСемена %.0f%% · останки %.2f" % [float(local_food["grass"]) * 100, float(local_food["leaves"]) * 100, float(local_food["seeds"]) * 100, float(local_food["carrion"])]
 			inspector.text += behavior_text(creature)
 			neural_activity.activations = creature["memory"]
 			neural_activity.queue_redraw()
@@ -484,7 +490,14 @@ func behavior_text(creature: Dictionary) -> String:
 	var prey := "—" if behavior["prey"] == null else "#%d" % int(behavior["prey"])
 	var threat := "—" if behavior["threat"] == null else "#%d" % int(behavior["threat"])
 	var text := "\n\nПОСЛЕДНИЙ ШАГ · день %.2f\nДобыча %s · Угроза %s\nДвижение: X %+.2f / Y %+.2f клет./день\nБерег заблокировал ход: %s" % [float(behavior["day"]), prey, threat, velocity.x, velocity.y, "да" if behavior["blocked"] else "нет"]
-	text += "\nВХОДЫ СЕТИ (не текущие показания):\nЭнергия %+.2f · Пища здесь %.2f\nПища З/В/С/Ю: %.2f / %.2f / %.2f / %.2f\nСуша З/В/С/Ю: %+.0f / %+.0f / %+.0f / %+.0f\nТемп. отклонение %+.2f · Шум %+.2f\nДобыча X/Y: %+.2f / %+.2f\nУгроза X/Y: %+.2f / %+.2f" % inputs
+	var meal = behavior.get("meal")
+	if meal is Dictionary:
+		var foods := {"grass": "трава", "leaves": "листва", "seeds": "семена", "carrion": "останки"}
+		text += "\nСъедено: %s · %.3f биомассы · +%.2f энергии" % [foods[meal["food"]], float(meal["amount"]), float(meal["energy"])]
+	else:
+		text += "\nНа этом шаге корм не съеден."
+
+	text += "\nВХОДЫ СЕТИ (не текущие показания):\nЭнергия %+.2f · Доступный корм %.2f\nКорм З/В/С/Ю: %.2f / %.2f / %.2f / %.2f\nСуша З/В/С/Ю: %+.0f / %+.0f / %+.0f / %+.0f\nТемп. отклонение %+.2f · Шум %+.2f\nДобыча X/Y: %+.2f / %+.2f\nУгроза X/Y: %+.2f / %+.2f" % inputs
 	text += "\nВЫХОДЫ СЕТИ (−1…1):\nХод X %+.2f · Ход Y %+.2f\nЕсть %+.2f · Потомство %+.2f" % outputs
 	text += "\nСигнал не гарантирует действие: еда > −0.4,\nпотомство > −0.5 + возраст/энергия/лимит.\nЦели отмечены на момент решения; это не мысли."
 	return text

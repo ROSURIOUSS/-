@@ -37,13 +37,14 @@ def array(value, length):
 
 
 def pack(world: World, paused: bool, speed: int) -> dict:
-    return {"format": 6, "config": asdict(world.config), "day": world.day,
+    return {"format": 7, "config": asdict(world.config), "day": world.day,
             "births": world.births, "deaths": world.deaths, "next_id": world.next_id,
             "introduced": world.introduced, "temperature_bias": world.temperature_bias,
             "moisture": world.moisture, "rain_bias": world.rain_bias,
             "death_causes": world.death_causes,
             "elevation": world.elevation, "food": world.food, "meat": world.meat,
             "soil": world.soil, "canopy": world.canopy,
+            "leaves": world.leaves, "seeds": world.seeds,
             "creatures": [asdict(c) for c in world.creatures],
             "observations": [world.observations[c.id] for c in world.creatures if c.id in world.observations],
             "rng": world.rng.getstate(), "history": world.history, "events": world.events,
@@ -90,7 +91,7 @@ def migrate_v4(data: dict) -> dict:
     records = upgraded["creatures"]
     if not isinstance(records, list) or len(records) > MAX_POPULATION:
         raise ValueError("Неверная популяция старого мира")
-    legacy_fields = {item.name for item in fields(Creature)} - MORPHOLOGY_FIELDS
+    legacy_fields = {item.name for item in fields(Creature)} - MORPHOLOGY_FIELDS - {"foraging"}
     by_id = {}
     for record in records:
         if not isinstance(record, dict) or record.keys() != legacy_fields:
@@ -113,7 +114,7 @@ def migrate_v4(data: dict) -> dict:
 
 def unpack(data: dict) -> tuple[World, bool, int]:
     try:
-        if not isinstance(data, dict) or type(data.get("format")) is not int or data["format"] not in (1, 2, 3, 4, 5, 6):
+        if not isinstance(data, dict) or type(data.get("format")) is not int or data["format"] not in (1, 2, 3, 4, 5, 6, 7):
             raise ValueError("Неизвестный формат сохранения")
         if data["format"] == 1:
             data = migrate_v1(data)
@@ -162,11 +163,20 @@ def unpack(data: dict) -> tuple[World, bool, int]:
         else:
             world.moisture = [float(number(v, 0, 1)) for v in array(data["moisture"], WIDTH * HEIGHT)]
             world.rain_bias = [float(number(v, 0, 1)) for v in array(data["rain_bias"], WIDTH * HEIGHT)]
+        if data["format"] <= 6:
+            # Preserve old grass and RNG; do not invent a second edible biomass stock.
+            world.leaves, world.seeds = [0.0] * (WIDTH * HEIGHT), [0.0] * (WIDTH * HEIGHT)
+            data = copy.deepcopy(data)
+            for record in data["creatures"]:
+                record["foraging"] = 0.0
+        else:
+            world.leaves = [float(number(v, 0, 1)) for v in array(data["leaves"], WIDTH * HEIGHT)]
+            world.seeds = [float(number(v, 0, 1)) for v in array(data["seeds"], WIDTH * HEIGHT)]
         world.refresh_weather()
         world.land_tiles = [i for i in range(WIDTH * HEIGHT) if world.land(i)]
         if not world.land_tiles:
             raise ValueError("В сохранении нет суши")
-        if any(world.food[i] != 0 or world.meat[i] != 0 or world.soil[i] != 0 or world.canopy[i] != 0 for i in range(WIDTH * HEIGHT) if not world.land(i)):
+        if any(world.food[i] != 0 or world.meat[i] != 0 or world.soil[i] != 0 or world.canopy[i] != 0 or world.leaves[i] != 0 or world.seeds[i] != 0 for i in range(WIDTH * HEIGHT) if not world.land(i)):
             raise ValueError("Ресурсы не могут находиться в океане")
         if any(world.moisture[i] != 1.0 for i in range(WIDTH * HEIGHT) if not world.land(i)):
             raise ValueError("В океане запас влаги должен быть полным")
@@ -176,7 +186,7 @@ def unpack(data: dict) -> tuple[World, bool, int]:
         world.creatures = []
         ids = set()
         actions = {"Исследует", "Ищет пищу", "Ест растения", "Оставляет потомство",
-                   "Спасается", "Охотится", "Ест останки", "Атакует"}
+                   "Спасается", "Охотится", "Ест останки", "Атакует", "Ест траву", "Ест листву", "Ест семена"}
         creature_fields = {item.name for item in fields(Creature)}
         for record in creatures:
             if not isinstance(record, dict) or record.keys() != creature_fields:
@@ -198,6 +208,7 @@ def unpack(data: dict) -> tuple[World, bool, int]:
                 raise ValueError("Неизвестный тип питания")
             number(c.elongation, 0.65, 1.8)
             number(c.armor, 0, 1)
+            number(c.foraging, 0, 1)
             integer(c.lineage, 1, c.id)
             if type(c.lineage_complete) is not bool:
                 raise ValueError("Неверная полнота родословной")

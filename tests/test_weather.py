@@ -232,7 +232,7 @@ class WeatherPersistenceTests(unittest.TestCase):
             restored, paused, speed = persistence.load(str(path))
         self.assertTrue(paused)
         self.assertEqual(speed, 5)
-        self.assertEqual(packed(sim.world)["format"], 6)
+        self.assertEqual(packed(sim.world)["format"], 7)
         self.assertEqual(packed(restored), packed(sim.world))
         self.assertEqual(restored.precipitation, sim.world.precipitation)
         for _ in range(32):
@@ -262,6 +262,10 @@ class WeatherPersistenceTests(unittest.TestCase):
             world.step()
         old = packed(world)
         old["format"] = 5
+        for field in ("leaves", "seeds", "observations"):
+            old.pop(field, None)
+        for record in old["creatures"]:
+            record.pop("foraging", None)
         del old["moisture"], old["rain_bias"]
         unchanged = copy.deepcopy(old)
         a, _, _ = persistence.unpack(old)

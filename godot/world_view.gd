@@ -33,6 +33,7 @@ var _weather_texture: ImageTexture
 var _temperature_texture: ImageTexture
 var _height_texture: ImageTexture
 var _habitat_texture: ImageTexture
+var _forage_texture: ImageTexture
 var _bodies: MultiMeshInstance3D
 var _nuclei: MultiMeshInstance3D
 var _tails: MultiMeshInstance3D
@@ -286,6 +287,7 @@ func update_world(data: Dictionary) -> void:
 		_height_texture = ImageTexture.create_from_image(image)
 		_ground_material.set_shader_parameter("height_map", _height_texture)
 	_update_habitat()
+	_update_forage()
 	_update_temperature()
 	_update_weather()
 	_ground_material.set_shader_parameter("sea_level", _geometry.sea)
@@ -315,6 +317,16 @@ func _update_habitat() -> void:
 		_ground_material.set_shader_parameter("habitat_map", _habitat_texture)
 	else:
 		_habitat_texture.update(image)
+
+func _update_forage() -> void:
+	var image := Image.create(_geometry.width, _geometry.height, false, Image.FORMAT_RGB8)
+	for i in range(_geometry.width * _geometry.height):
+		image.set_pixel(i % _geometry.width, i / _geometry.width, Color(float(snapshot["leaves"][i]), float(snapshot["seeds"][i]), 0))
+	if _forage_texture == null:
+		_forage_texture = ImageTexture.create_from_image(image)
+		_ground_material.set_shader_parameter("forage_map", _forage_texture)
+	else:
+		_forage_texture.update(image)
 
 func _update_temperature() -> void:
 	var image := Image.create(_geometry.width, _geometry.height, false, Image.FORMAT_RF)
@@ -483,17 +495,26 @@ func _update_plants() -> void:
 	var transforms: Array[Transform3D] = []
 	var colors: Array[Color] = []
 	for i in range(_geometry.width * _geometry.height):
-		var cover := float(snapshot["canopy"][i])
-		if cover < 0.5 or int(snapshot["biomes"][i]) not in [3, 4, 5, 6]:
+		if float(snapshot["elevation"][i]) <= _geometry.sea:
 			continue
+		var grass := float(snapshot["food"][i])
+		var leaves := float(snapshot["leaves"][i])
+		var seeds := float(snapshot["seeds"][i])
 		var jitter := fposmod(sin(i * 137.31) * 43758.54, 1.0)
 		var uv := Vector2((i % _geometry.width + 0.2 + jitter * 0.6) / _geometry.width, (float(i / _geometry.width) + 0.3 + jitter * 0.4) / _geometry.height)
-		var height := 0.075 + cover * 0.06
-		var basis := _tangent_basis(uv) * Basis.from_scale(Vector3(0.03 + jitter * 0.02, height, 0.03 + jitter * 0.02))
-		transforms.append(Transform3D(basis, _geometry.point(uv, height * 0.5)))
-		var leaf_color := Color("235c43").lerp(Color("619661"), jitter)
 		var drought := clampf((0.30 - float(snapshot["moisture"][i])) / 0.30, 0.0, 1.0)
-		colors.append(leaf_color.lerp(Color("a28a52"), drought))
+		# Fixed representative glyphs per tile, not independent simulated plants/seeds.
+		for kind in range(3):
+			var amount: float = [grass, leaves, seeds][kind]
+			if amount < [0.15, 0.10, 0.02][kind]:
+				continue
+			var site := uv + Vector2(float(kind) * 0.12, 0) / Vector2(_geometry.width, _geometry.height)
+			var height: float = [0.008 + grass * 0.012, 0.025 + leaves * 0.04, 0.004][kind]
+			var width: float = [0.003, 0.012 + leaves * 0.01, 0.003 + seeds * 0.006][kind]
+			var basis := _tangent_basis(site) * Basis.from_scale(Vector3(width, height, width))
+			transforms.append(Transform3D(basis, _geometry.point(site, height * 0.5)))
+			var color: Color = [Color("7aa44d"), Color("235c43"), Color("e4b95b")][kind]
+			colors.append(color.lerp(Color("a28a52"), drought * 0.6))
 	_plants.multimesh.instance_count = transforms.size()
 	for i in range(transforms.size()):
 		_plants.multimesh.set_instance_transform(i, transforms[i])

@@ -1,11 +1,13 @@
 """Last-step observations, not an explanation of intent or a new controller.
 
-Kept separately from inherited Creature fields. Optional v6 save metadata preserves
+Kept separately from inherited Creature fields. Optional world-save save metadata preserves
 observations on undo/recovery; old saves simply have none until the next step.
 """
 from __future__ import annotations
 
 import math
+import copy
+from .feeding import FOODS
 
 
 def validate_observations(records, creatures, day):
@@ -19,7 +21,7 @@ def validate_observations(records, creatures, day):
             raise ValueError("Неверное число в наблюдении поведения")
         return value
     for record in records:
-        if not isinstance(record, dict) or record.keys() != keys:
+        if not isinstance(record, dict) or record.keys() not in (keys, keys | {"meal"}):
             raise ValueError("Неверная запись поведения")
         identity = record["id"]
         if type(identity) is not int or identity not in alive or identity in result:
@@ -39,8 +41,14 @@ def validate_observations(records, creatures, day):
                 raise ValueError("Неверная цель наблюдения")
         if type(record["blocked"]) is not bool:
             raise ValueError("Неверный признак препятствия")
-        result[identity] = {key: list(value) if isinstance(value, list) else value
-                            for key, value in record.items()}
+        meal = record.get("meal")
+        if meal is not None:
+            if not isinstance(meal, dict) or meal.keys() != {"food", "amount", "energy"} or meal["food"] not in FOODS:
+                raise ValueError("Неверная запись приёма пищи")
+            number(meal["amount"], 0, 3)
+            number(meal["energy"], 0, 185)
+        result[identity] = copy.deepcopy(record)
+        result[identity]["meal"] = copy.deepcopy(meal)
     return result
 
 
@@ -48,4 +56,4 @@ def public_observation(record):
     if record is None:
         return None
     return {key: [round(v, 4) for v in value] if isinstance(value, list) else value
-            for key, value in record.items()}
+            for key, value in copy.deepcopy(record).items()}

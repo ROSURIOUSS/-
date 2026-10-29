@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import random
+from .feeding import LABELS, advance_forage, initial_forage, food_signal, take_meal
 from .behavior import public_observation
 from .weather import advance_moisture, initial_moisture, weather_field
 try:
@@ -99,6 +100,7 @@ class Creature:
     kills: int = 0
     elongation: float = 1.0
     armor: float = 0.0
+    foraging: float = 0.0
     lineage: int = 0
     lineage_complete: bool = True
     memory: list[float] = field(default_factory=lambda: [0.0] * HIDDEN)
@@ -230,6 +232,7 @@ class World:
         self.food = [self.rng.uniform(0.35, 1) if self.land(i) else 0.0 for i in range(WIDTH * HEIGHT)]
         self.meat = [0.0] * (WIDTH * HEIGHT)
         self.soil, self.canopy = environment_fields(config, self.elevation, self.food)
+        self.leaves, self.seeds = initial_forage(self.elevation, config.sea_level, self.canopy, self.food)
         self.temperature_bias = [0.0] * (WIDTH * HEIGHT)
         self.moisture = initial_moisture(config, self.elevation)
         self.rain_bias = [0.0] * (WIDTH * HEIGHT)
@@ -279,6 +282,7 @@ class World:
             vision = gene(parent.vision, 1.0, 3.0, 12.0)
             elongation = gene(parent.elongation, 0.12, 0.65, 1.8)
             armor = gene(parent.armor, 0.10, 0.0, 1.0)
+            foraging = gene(parent.foraging, 0.12, 0.0, 1.0)
         else:
             brain = initial_brain(rng, diet)
             hue = rng.random()
@@ -288,11 +292,12 @@ class World:
             vision = rng.uniform(6, 10)
             elongation = rng.uniform(0.85, 1.2)
             armor = rng.uniform(0.0, 0.3)
+            foraging = hue
         creature = Creature(self.next_id, x, y, brain, hue, temp,
                             generation=parent.generation + 1 if parent else 1,
                             parent=parent.id if parent else None, diet=diet,
                             speed=speed, size=size, vision=vision,
-                            elongation=elongation, armor=armor,
+                            elongation=elongation, armor=armor, foraging=foraging,
                             lineage=parent.lineage if parent else self.next_id,
                             lineage_complete=parent.lineage_complete if parent else True)
         self.next_id += 1
@@ -323,7 +328,12 @@ class World:
             self.canopy[i] = max(0.0, min(1.0, cover + dt * (
                 0.013 * climate * water * max(0, food - 0.45)
                 - 0.018 * max(0, 0.35 - food) - 0.006 * (1 - climate) - 0.008 * max(0.0, 0.22 - self.moisture[i]))))
-            self.food[i] = min(1.0, food + growth * water * (0.4 + climate * 0.6) * (0.5 + self.soil[i] * 0.7) * (1 - cover * 0.18) + decomposed * 0.2)
+            self.food[i] = min(1.0, food + growth * water * (0.4 + climate * 0.6) * (0.5 + self.soil[i] * 0.7) * (1 - cover * 0.18) * (1 - self.leaves[i] * 0.35) + decomposed * 0.2)
+            self.leaves[i], self.seeds[i], litter = advance_forage(
+                self.leaves[i], self.seeds[i], self.canopy[i], self.moisture[i], self.soil[i],
+                local_temperature, self.day, dt)
+            self.soil[i] = min(1.0, self.soil[i] + litter * 0.08 * water)
+
         dead: set[int] = set()
         babies: list[Creature] = []
         had_population = bool(self.creatures)
@@ -352,9 +362,8 @@ class World:
             temp -= self.canopy[tile] * (3.0 if temp > 20 else -0.8)
             prey = index.nearest(c, "herbivore", c.vision) if c.diet == "carnivore" else None
             threat = index.nearest(c, "carnivore", c.vision) if c.diet == "herbivore" else None
-            resource = self.food if c.diet == "herbivore" else self.meat
-            inputs = [c.energy / 100 - 1, min(1, resource[tile]),
-                      *[min(1, resource[n]) for n in nearby],
+            inputs = [c.energy / 100 - 1, food_signal(self, c, tile),
+                      *[food_signal(self, c, n) for n in nearby],
                       *[1.0 if self.land(n) else -1.0 for n in nearby],
                       (temp - c.ideal_temp) / 30, self.rng.uniform(-1, 1),
                       *sense(c, prey), *sense(c, threat)]
@@ -373,18 +382,17 @@ class World:
                 "id": c.id, "day": self.day, "dt": dt, "inputs": inputs,
                 "outputs": [dx, dy, eat, reproduce], "velocity": velocity,
                 "prey": prey.id if prey else None, "threat": threat.id if threat else None,
-                "blocked": blocked,
+                "blocked": blocked, "meal": None,
             }
             # Labels report measured movement, not assumed intent from mere proximity.
             escaping = threat is not None and sum(a * b for a, b in zip(velocity, inputs[14:16])) < -1e-6
             chasing = prey is not None and sum(a * b for a, b in zip(velocity, inputs[12:14])) > 1e-6
             c.action = "Спасается" if escaping else ("Охотится" if chasing else "Ищет пищу")
             if eat > -0.4:
-                bite = min(resource[tile], dt * 0.38 * c.size)
-                resource[tile] -= bite
-                c.energy = min(185.0, c.energy + bite * (75 if c.diet == "herbivore" else 105))
-                if bite > 0.01:
-                    c.action = "Ест растения" if c.diet == "herbivore" else "Ест останки"
+                meal = take_meal(self, c, tile, dt)
+                self.observations[c.id]["meal"] = meal
+                if meal is not None and meal["amount"] > 0.01:
+                    c.action = LABELS[meal["food"]]
             c.energy -= dt * (2.1 * c.size + (abs(dx) + abs(dy)) * c.speed**2 * 0.9 * (0.8 + 0.2 * c.elongation)
                               + c.armor * 0.9 + c.vision * 0.06 + abs(temp - c.ideal_temp) * 0.16 + c.age * 0.008)
             if c.health <= 0 or c.energy <= 0 or c.age > 220:
@@ -495,13 +503,23 @@ class World:
                       "local_moisture": round(self.moisture[self.tile(c.x, c.y)], 3),
                       "local_rain": round(self.precipitation[self.tile(c.x, c.y)], 3),
                       "elongation": round(c.elongation, 3), "armor": round(c.armor, 3),
+                      "foraging": round(c.foraging, 3),
+                      "local_food": {"grass": round(self.food[self.tile(c.x, c.y)], 3),
+                                     "leaves": round(self.leaves[self.tile(c.x, c.y)], 3),
+                                     "seeds": round(self.seeds[self.tile(c.x, c.y)], 3),
+                                     "carrion": round(self.meat[self.tile(c.x, c.y)], 3)},
                       "mobility": round(c.mobility, 3), "lineage": c.lineage,
                       "lineage_complete": c.lineage_complete,
                       "memory": [round(v, 3) for v in c.memory],
                       "behavior": public_observation(self.observations.get(c.id))}
                      for c in self.creatures]
         lineages = self.lineages()
-        return {"moisture": [round(v, 3) for v in self.moisture],
+        return {"leaves": [round(v, 3) for v in self.leaves],
+                "seeds": [round(v, 3) for v in self.seeds],
+                "nutrition": {"grass_percent": round(sum(self.food) / len(self.land_tiles) * 100),
+                              "leaves_percent": round(sum(self.leaves) / len(self.land_tiles) * 100),
+                              "seeds_percent": round(sum(self.seeds) / len(self.land_tiles) * 100)},
+                "moisture": [round(v, 3) for v in self.moisture],
                 "rain": [round(v, 3) for v in self.precipitation],
                 "weather": {"moisture_percent": round(sum(self.moisture[i] for i in self.land_tiles) / len(self.land_tiles) * 100),
                             "rain_percent": round(sum(self.precipitation[i] for i in self.land_tiles) / len(self.land_tiles) * 100),

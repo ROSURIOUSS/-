@@ -87,6 +87,20 @@ func _run() -> void:
 	assert(not view._painting)
 	view.set_brush("observe", 2.5, 0.6, 5)
 	assert(view._temperature_texture != null)
+	assert(view._forage_texture != null and data["leaves"].size() == data["food"].size())
+	assert(view._plants.multimesh.instance_count > 0)
+	var forage_pixels := view._forage_texture.get_image()
+	var forage_tile := 0
+	for i in range(data["leaves"].size()):
+		if float(data["leaves"][i]) > 0.1:
+			forage_tile = i
+			break
+	var forage_pixel := forage_pixels.get_pixel(forage_tile % geometry.width, forage_tile / geometry.width)
+	assert(absf(forage_pixel.r - float(data["leaves"][forage_tile])) < 0.005)
+	assert(absf(forage_pixel.g - float(data["seeds"][forage_tile])) < 0.005)
+	for forage_layer in [7, 8]:
+		view.layer = forage_layer
+		assert(view._ground_material.get_shader_parameter("layer") == forage_layer)
 	view.layer = 4
 	assert(view._ground_material.get_shader_parameter("layer") == 4)
 	view.layer = 0
@@ -165,7 +179,7 @@ func _run() -> void:
 	while received.is_empty() and failures.is_empty() and Time.get_ticks_msec() < deadline:
 		await process_frame
 	assert(failures.is_empty(), str(failures))
-	assert(received.has("moisture") and received.has("autosaves"), "Bundled core did not return the recovery protocol")
+	assert(received.has("moisture") and received.has("autosaves") and received.has("leaves") and received.has("nutrition"), "Bundled core did not return the recovery protocol")
 	bridge.submit("world", {"population": 8})
 	while int(received.get("population", 0)) != 8 and Time.get_ticks_msec() < deadline:
 		await process_frame
@@ -241,6 +255,16 @@ func _run() -> void:
 			inspected_network = true
 			break
 	assert(inspected_network, "Inspect a real neural decision, not just the empty-state label")
+	var inspected_meal := false
+	for fed: Dictionary in app.snapshot["creatures"]:
+		var decision = fed.get("behavior")
+		if decision is Dictionary and decision.get("meal") is Dictionary:
+			app.map_view.select_creature(int(fed["id"]))
+			assert(app.inspector.text.contains("Съедено:") and app.inspector.text.contains("Пищеварение:"))
+			assert(app.inspector.text.contains("Здесь: трава"))
+			inspected_meal = true
+			break
+	assert(inspected_meal, "Inspect a real meal reported by Python")
 	assert(app.behavior_text({"behavior": null}).contains("ещё нет шага"))
 	assert(app.brush_select.item_count == 13)
 	app.brush_select.select(5)
@@ -327,7 +351,7 @@ func _run() -> void:
 	DirAccess.remove_absolute(backup_folder)
 	DirAccess.remove_absolute(test_preferences)
 	DirAccess.remove_absolute(session_root)
-	print("PASS: planet, meshes, layers, zoom, bundled core, sandbox IPC/undo/step, body genes, lineage follow, weather, desktop toolbox, autosave timer/rotation/selection/restart consent, shutdown")
+	print("PASS: planet, meshes, layers, zoom, bundled core, sandbox IPC/undo/step, body genes, lineage follow, weather, desktop toolbox, autosave timer/rotation/selection/restart consent, forage textures/plants/layers/real meal, shutdown")
 	quit(0)
 
 func _capture(view: PlanetView, folder: String, name: String) -> void:

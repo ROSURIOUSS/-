@@ -19,9 +19,11 @@ def payload(world):
 def legacy(world, version=4):
     data = payload(world)
     data["format"] = version
+    for field in ("leaves", "seeds", "observations"):
+        data.pop(field, None)
     del data["moisture"], data["rain_bias"]
     for record in data["creatures"]:
-        for key in NEW_FIELDS:
+        for key in (*NEW_FIELDS, "foraging"):
             del record[key]
     return data
 
@@ -232,7 +234,7 @@ class BodySaveTests(unittest.TestCase):
         sim.world.creatures[0].armor = 0.9
         sim.world.creatures[1].elongation = 1.65
         before = payload(sim.world)
-        self.assertEqual(before["format"], 6)
+        self.assertEqual(before["format"], 7)
         sim.command("brush", dict(kind="warm", x=40.5, y=24.5))
         sim.command("single_step", {})
         sim.command("undo", {})

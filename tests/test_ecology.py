@@ -104,7 +104,7 @@ class EcologyTests(unittest.TestCase):
         parent.think([0.5] * INPUTS)
         parent.health = 60
         child = world.new_creature(parent.x, parent.y, parent)
-        for field in ("brain", "diet", "speed", "size", "vision", "ideal_temp", "hue", "elongation", "armor", "lineage", "lineage_complete"):
+        for field in ("brain", "diet", "speed", "size", "vision", "ideal_temp", "hue", "elongation", "armor", "lineage", "lineage_complete", "foraging"):
             self.assertEqual(getattr(parent, field), getattr(child, field))
         self.assertEqual(child.memory, [0.0] * HIDDEN)
         self.assertIsNot(child.memory, parent.memory)
@@ -171,7 +171,7 @@ class SaveCompatibilityTests(unittest.TestCase):
         for _ in range(32):
             world.step()
         data = json.loads(json.dumps(pack(world, True, 5)))
-        self.assertEqual(data["format"], 6)
+        self.assertEqual(data["format"], 7)
         restored, paused, speed = unpack(data)
         self.assertTrue(paused)
         self.assertEqual(speed, 5)
@@ -199,13 +199,15 @@ class SaveCompatibilityTests(unittest.TestCase):
         world = World(Config(population=2, predator_ratio=0))
         data = json.loads(json.dumps(pack(world, False, 1)))
         data["format"] = 1
+        for field in ("leaves", "seeds", "observations"):
+            data.pop(field, None)
         for key in ("meat", "death_causes", "soil", "canopy", "introduced", "temperature_bias", "moisture", "rain_bias"):
             del data[key]
         del data["config"]["predator_ratio"]
         for point in data["history"]:
             del point["herbivores"], point["carnivores"]
         extra = ("diet", "speed", "size", "vision", "health", "kills", "memory",
-                 "elongation", "armor", "lineage", "lineage_complete")
+                 "elongation", "armor", "lineage", "lineage_complete", "foraging")
         legacy_weights = [math.sin(i) * 0.3 for i in range(140)]
         for record in data["creatures"]:
             for key in extra:

@@ -137,6 +137,7 @@ class Sandbox:
                 amount = brush.strength * weight
                 if brush.kind == "plant":
                     adjust("food", tile, world.food[tile] + 0.5 * amount)
+                    adjust("leaves", tile, world.leaves[tile] + 0.35 * amount)
                     adjust("canopy", tile, world.canopy[tile] + 0.4 * amount)
                     adjust("soil", tile, world.soil[tile] + 0.08 * amount)
                 elif brush.kind == "fertilize":
@@ -145,6 +146,8 @@ class Sandbox:
                 elif brush.kind == "dry":
                     adjust("moisture", tile, world.moisture[tile] - 0.5 * amount)
                     adjust("food", tile, world.food[tile] - 0.65 * amount)
+                    adjust("leaves", tile, world.leaves[tile] - 0.45 * amount)
+                    adjust("seeds", tile, world.seeds[tile] - 0.2 * amount)
                     adjust("canopy", tile, world.canopy[tile] - 0.4 * amount)
                     adjust("soil", tile, world.soil[tile] - 0.12 * amount)
         if not (changes or victims or healing or new_count):
@@ -179,7 +182,7 @@ class Sandbox:
             for tile in changes["elevation"]:
                 if not world.land(tile):
                     world.moisture[tile] = 1.0
-                    for field in ("food", "meat", "soil", "canopy"):
+                    for field in ("food", "meat", "soil", "canopy", "leaves", "seeds"):
                         getattr(world, field)[tile] = 0.0
                 elif tile not in previous_land:
                     world.moisture[tile] = initial_moisture(world.config, [world.elevation[tile]])[0]
