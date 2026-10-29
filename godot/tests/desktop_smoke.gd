@@ -37,8 +37,23 @@ func _run() -> void:
 	assert(view._bodies.multimesh.instance_count == data["population"])
 	var first: Dictionary = data["creatures"][0]
 	var rendered := view._bodies.multimesh.get_instance_transform(0)
-	assert(absf(rendered.basis.z.length() - 0.020 * float(first["size"]) * float(first["elongation"])) < 0.00001)
+	assert(absf(rendered.basis.z.length() - 0.005 * float(first["size"]) * float(first["elongation"])) < 0.00001)
 	assert(absf(view._bodies.multimesh.get_instance_custom_data(0).b - float(first["armor"])) < 0.005)
+	# Body, organelles, tails, ground clearance and selection share the same shrink.
+	var visual_size := float(first["size"]) * 0.25
+	var girth := 1.0 / sqrt(float(first["elongation"]))
+	assert(absf(rendered.basis.x.length() - 0.012 * girth * visual_size) < 0.00001)
+	var nucleus := view._nuclei.multimesh.get_instance_transform(0)
+	assert(absf(nucleus.basis.x.length() - 0.0045 * visual_size) < 0.00001)
+	var tail := view._tails.multimesh.get_instance_transform(0)
+	assert(absf(tail.basis.y.length() - 0.018 * visual_size) < 0.00001)
+	var uv := Vector2(first["x"], first["y"]) / Vector2(geometry.width, geometry.height)
+	assert(absf(rendered.origin.length() - geometry.radius(uv) - 0.016 * visual_size) < 0.00001)
+	view.select_creature(int(first["id"]))
+	view._process(0.0)
+	assert(view._selection.visible)
+	assert(absf(view._selection.basis.x.length() - girth * visual_size) < 0.00001)
+	assert(absf(view._selection.position.distance_to(rendered.origin) - 0.007 * visual_size) < 0.00001)
 	if not screenshots.is_empty():
 		await create_timer(1.0).timeout
 		await _capture(view, screenshots, "orbit")

@@ -8,6 +8,8 @@ const PLANET_SHADER = preload("res://shaders/planet.gdshader")
 const CLOUD_SHADER = preload("res://shaders/clouds.gdshader")
 const ATMOSPHERE_SHADER = preload("res://shaders/atmosphere.gdshader")
 const ORGANISM_SHADER = preload("res://shaders/organism.gdshader")
+# Visual units only: do not change inherited size or ecological interactions.
+const ORGANISM_VISUAL_SCALE: float = 0.25
 
 var snapshot: Dictionary = {}
 var selected_id: int = -1
@@ -385,7 +387,7 @@ func _update_organisms() -> void:
 	for creature: Dictionary in snapshot["creatures"]:
 		var identity := int(creature["id"])
 		var uv := Vector2(creature["x"], creature["y"]) / Vector2(_geometry.width, _geometry.height)
-		var target := _geometry.point(uv, 0.016 * float(creature["size"]))
+		var target := _geometry.point(uv, 0.016 * float(creature["size"]) * ORGANISM_VISUAL_SCALE)
 		var visual: Dictionary = _visuals.get(identity, {"position": target, "heading": float(identity)})
 		var old_target: Vector3 = visual.get("target", target)
 		if old_target.distance_to(target) > 0.00001:
@@ -510,7 +512,7 @@ func _process(delta: float) -> void:
 		visual["position"] = current
 		var uv := Geometry.coordinates(current)
 		var basis := _tangent_basis(uv) * Basis(Vector3.UP, float(visual["heading"]))
-		var scale := float(c["size"])
+		var scale := float(c["size"]) * ORGANISM_VISUAL_SCALE
 		var color := Color.from_hsv(float(c["hue"]), 0.49, 0.88)
 		if c["diet"] == "carnivore":
 			color = color.lerp(Color("e89c72"), 0.35)
@@ -534,7 +536,7 @@ func _process(delta: float) -> void:
 			_tails.multimesh.set_instance_custom_data(index * 3 + segment, Color(float(identity % 1000) / 1000.0, float(c["health"]) / 100, 0, 0))
 		if identity == selected_id:
 			_selection.visible = true
-			_selection.transform = Transform3D(basis * Basis.from_scale(Vector3(girth, 1.0, shape) * scale), current - basis.y * 0.007)
+			_selection.transform = Transform3D(basis * Basis.from_scale(Vector3(girth, 1.0, shape) * scale), current - basis.y * 0.007 * scale)
 		index += 1
 
 func _update_camera(delta: float) -> void:
