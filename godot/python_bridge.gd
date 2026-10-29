@@ -22,6 +22,12 @@ var _broken: bool = false
 
 func start() -> void:
 	_dispose()
+	var version := Engine.get_version_info()
+	# 4.4 Unix stderr pipes own fd 0 and close the parent's stdin on disposal.
+	# A following execute_with_pipe child then starts without stdin. Fixed in 4.5.
+	if int(version["major"]) < 4 or (int(version["major"]) == 4 and int(version["minor"]) < 5):
+		_fail("Нужен Godot 4.5 или новее. В Godot 4.4 есть ошибка каналов Python при повторном запуске ядра. Обновите движок и снова откройте проект.")
+		return
 	_closing = false
 	_broken = false
 	is_ready = false
